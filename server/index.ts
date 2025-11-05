@@ -1,6 +1,7 @@
 import express from 'express';
 import cors from 'cors';
 import path from 'path';
+import fs from 'fs';
 import { router as apiRouter } from './routes/api';
 import { ensureDirectories, getProjectRoot } from './utils/filesystem';
 
@@ -22,11 +23,20 @@ app.use('/uploads', express.static(uploadsPath));
 // API routes
 app.use('/api', apiRouter);
 
-// Serve frontend in production
-if (process.env.NODE_ENV === 'production') {
-  app.use(express.static(path.join(__dirname, '../client')));
+// Serve frontend (check if built files exist)
+const clientPath = path.join(__dirname, '../client');
+const indexPath = path.join(clientPath, 'index.html');
+
+if (fs.existsSync(indexPath)) {
+  console.log('Serving frontend from:', clientPath);
+  app.use(express.static(clientPath));
   app.get('*', (_, res) => {
-    res.sendFile(path.join(__dirname, '../client/index.html'));
+    res.sendFile(indexPath);
+  });
+} else {
+  console.log('Frontend not built. Run "npm run build" to build the application.');
+  app.get('*', (_, res) => {
+    res.status(404).send('Frontend not built. Please run "npm run build" first.');
   });
 }
 
