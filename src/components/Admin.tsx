@@ -14,7 +14,13 @@ function Admin() {
   const [images, setImages] = useState<Image[]>([])
   const [loading, setLoading] = useState(true)
   const [uploading, setUploading] = useState(false)
+  const [notification, setNotification] = useState<string | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
+
+  const showNotification = (message: string) => {
+    setNotification(message)
+    setTimeout(() => setNotification(null), 2000)
+  }
 
   useEffect(() => {
     fetchImages()
@@ -53,6 +59,7 @@ function Admin() {
       }
 
       await fetchImages()
+      showNotification('Photos uploaded! Slideshow will update automatically.')
     } catch (err) {
       console.error('Error uploading images:', err)
       alert('Failed to upload some images')
@@ -72,6 +79,7 @@ function Admin() {
 
       if (!response.ok) throw new Error('Toggle failed')
       await fetchImages()
+      showNotification('Updated! Slideshow will refresh shortly.')
     } catch (err) {
       console.error('Error toggling image:', err)
     }
@@ -87,6 +95,7 @@ function Admin() {
 
       if (!response.ok) throw new Error('Delete failed')
       await fetchImages()
+      showNotification('Photo deleted! Slideshow will update automatically.')
     } catch (err) {
       console.error('Error deleting image:', err)
     }
@@ -98,6 +107,12 @@ function Admin() {
 
   return (
     <div className="admin-container">
+      {notification && (
+        <div className="notification">
+          ✓ {notification}
+        </div>
+      )}
+      
       <div className="admin-header">
         <h2>Photo Gallery</h2>
         <label className="upload-btn">
