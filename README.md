@@ -16,6 +16,21 @@ A modern web application that turns your Raspberry Pi into a beautiful digital p
 - Raspberry Pi (any model with network connectivity)
 - Node.js 18+ and npm installed
 - Display connected to your Raspberry Pi
+- Chromium browser (for kiosk mode display)
+
+### Installing Prerequisites on Raspberry Pi
+
+If you need to install Node.js:
+```bash
+curl -fsSL https://deb.nodesource.com/setup_18.x | sudo -E bash -
+sudo apt-get install -y nodejs
+```
+
+If you need to install Chromium:
+```bash
+sudo apt update
+sudo apt install chromium-browser -y
+```
 
 ## Installation
 
@@ -94,12 +109,18 @@ For example: `http://192.168.1.100:3000`
 
 To make the application start automatically when your Raspberry Pi boots:
 
-1. **Create a systemd service:**
+1. **First, find the full path to Node.js:**
+```bash
+which node
+```
+This will output something like `/usr/bin/node` or `/home/YOUR_USERNAME/.nvm/versions/node/v18.x.x/bin/node`
+
+2. **Create a systemd service:**
 ```bash
 sudo nano /etc/systemd/system/photo-frame.service
 ```
 
-2. **Add the following content** (replace `YOUR_USERNAME` and paths as needed):
+3. **Add the following content** (replace `YOUR_USERNAME`, `NODE_PATH`, and project path as needed):
 ```ini
 [Unit]
 Description=Digital Photo Frame
@@ -109,42 +130,183 @@ After=network.target
 Type=simple
 User=YOUR_USERNAME
 WorkingDirectory=/home/YOUR_USERNAME/rpi-frame
-ExecStart=/usr/bin/npm start
+ExecStart=/usr/bin/node /home/YOUR_USERNAME/rpi-frame/dist/server/index.js
 Restart=on-failure
+RestartSec=10
 Environment=NODE_ENV=production
+Environment=PORT=3000
 
 [Install]
 WantedBy=multi-user.target
 ```
 
-3. **Enable and start the service:**
+**Important Notes:**
+- Replace `YOUR_USERNAME` with your actual username (run `whoami` to find it)
+- Replace `/usr/bin/node` with the path from step 1
+- Replace `/home/YOUR_USERNAME/rpi-frame` with your actual project path
+- Make sure you've run `npm run build` before starting the service!
+
+4. **Reload systemd, enable and start the service:**
 ```bash
+sudo systemctl daemon-reload
 sudo systemctl enable photo-frame.service
 sudo systemctl start photo-frame.service
 ```
 
-4. **Check status:**
+5. **Check status:**
 ```bash
 sudo systemctl status photo-frame.service
+```
+
+If you see errors, check the logs:
+```bash
+sudo journalctl -u photo-frame.service -n 50 -f
+```
+
+6. **To stop or restart the service:**
+```bash
+sudo systemctl stop photo-frame.service
+sudo systemctl restart photo-frame.service
 ```
 
 ## Auto-Start Browser in Kiosk Mode (Optional)
 
 To automatically open the slideshow in fullscreen when the Pi boots:
 
-1. **Edit autostart file:**
+### Method 1: Using autostart (Raspberry Pi Desktop)
+
+1. **First, check which desktop environment you're using:**
+```bash
+echo $DESKTOP_SESSION
+```
+
+2. **Create/edit the autostart file:**
+
+For LXDE (most Raspberry Pi OS):
 ```bash
 mkdir -p ~/.config/lxsession/LXDE-pi
 nano ~/.config/lxsession/LXDE-pi/autostart
 ```
 
-2. **Add these lines:**
+For other desktop environments, the path might be different:
+- LXDE: `~/.config/lxsession/LXDE/autostart`
+- Wayfire: `~/.config/wayfire.ini`
+
+3. **Add these lines to the autostart file:**
 ```
 @xset s off
 @xset -dpms
 @xset s noblank
-@chromium-browser --kiosk --app=http://localhost:3000
+@sleep 10
+@chromium-browser --kiosk --start-fullscreen --app=http://localhost:3000 --noerrdialogs --disable-infobars --no-first-run --check-for-update-interval=31536000
 ```
+
+**What these do:**
+- `xset` commands: Disable screen blanking and power saving
+- `sleep 10`: Wait 10 seconds for the server to fully start
+- `--kiosk`: Full screen mode without browser UI
+- `--noerrdialogs`: Suppress error dialogs
+- `--disable-infobars`: Hide info bars
+- `--no-first-run`: Skip first-run prompts
+
+4. **Verify the browser command works:**
+```bash
+chromium-browser --version
+```
+
+If that doesn't work, try:
+```bash
+chromium --version
+```
+
+Use whichever one works in your autostart file.
+
+5. **Reboot to test:**
+```bash
+sudo reboot
+```
+
+### Method 2: Using a startup script (Alternative)
+
+If Method 1 doesn't work, try this approach:
+
+1. **Create a startup script:**
+```bash
+nano ~/start-photo-frame.sh
+```
+
+2. **Add this content:**
+```bash
+#!/bin/bash
+
+# Wait for the desktop to load
+sleep 15
+
+# Disable screen blanking
+xset s off
+xset -dpms
+xset s noblank
+
+# Wait for server to be ready
+while ! curl -s http://localhost:3000 > /dev/null; do
+    echo "Waiting for server..."
+    sleep 2
+done
+
+# Launch browser in kiosk mode
+DISPLAY=:0 chromium-browser --kiosk --start-fullscreen \
+  --app=http://localhost:3000 \
+  --noerrdialogs --disable-infobars \
+  --no-first-run --disable-translate \
+  --check-for-update-interval=31536000 &
+```
+
+3. **Make it executable:**
+```bash
+chmod +x ~/start-photo-frame.sh
+```
+
+4. **Add to autostart:**
+```bash
+mkdir -p ~/.config/lxsession/LXDE-pi
+nano ~/.config/lxsession/LXDE-pi/autostart
+```
+
+Add this line:
+```
+@/home/YOUR_USERNAME/start-photo-frame.sh
+```
+(Replace `YOUR_USERNAME` with your actual username)
+
+5. **Reboot to test:**
+```bash
+sudo reboot
+```
+
+### Troubleshooting:
+
+**Browser doesn't open:**
+- Check if the autostart file is in the right location
+- Try running the browser command manually to test it
+- Check if Chromium is installed: `sudo apt install chromium-browser`
+- Increase the sleep time in case the server needs longer to start
+
+**Browser opens but shows error:**
+- Make sure the service started: `sudo systemctl status photo-frame.service`
+- Check if the server is accessible: `curl http://localhost:3000`
+- Look at browser console with F12
+
+**Screen blanks after a while:**
+- Check if your Pi has additional power-saving settings
+- Add to `/etc/lightdm/lightdm.conf` under `[Seat:*]`:
+  ```
+  xserver-command=X -s 0 -dpms
+  ```
+
+**To manually exit kiosk mode on the Pi:**
+- Press `Alt+F4` to close the browser
+- Press `Ctrl+W` to close the current tab
+- Press `F11` to exit fullscreen
 
 ## Project Structure
 
