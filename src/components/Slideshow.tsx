@@ -148,8 +148,6 @@ function Slideshow({ onShowNav }: SlideshowProps) {
   return (
     <div 
       className="slideshow-container"
-      onMouseEnter={() => setShowControls(true)}
-      onMouseLeave={() => setShowControls(false)}
     >
       {images.map((image, index) => (
         <div
@@ -159,37 +157,6 @@ function Slideshow({ onShowNav }: SlideshowProps) {
           <img src={image.path} alt={image.originalName} />
         </div>
       ))}
-      
-      {showControls && (
-        <div className="slideshow-controls">
-          <button
-            className="slideshow-control-btn"
-            onClick={() => setCurrentIndex((prev) => (prev - 1 + images.length) % images.length)}
-            title="Previous (←)"
-          >
-            ‹
-          </button>
-          <div className="slideshow-indicator">
-            {currentIndex + 1} / {images.length}
-          </div>
-          <button
-            className="slideshow-control-btn"
-            onClick={() => setCurrentIndex((prev) => (prev + 1) % images.length)}
-            title="Next (→)"
-          >
-            ›
-          </button>
-          {onShowNav && (
-            <button
-              className="slideshow-exit-btn"
-              onClick={onShowNav}
-              title="Exit (ESC)"
-            >
-              ✕
-            </button>
-          )}
-        </div>
-      )}
     </div>
   )
 }
