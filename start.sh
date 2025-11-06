@@ -22,7 +22,7 @@ sleep 5
 DISPLAY=:0 chromium-browser \
   --kiosk \
   --start-fullscreen \
-  --app=http://localhost:3000 \
+  --app=http://localhost:3000/slideshow \
   --noerrdialogs \
   --disable-infobars \
   --no-first-run \
