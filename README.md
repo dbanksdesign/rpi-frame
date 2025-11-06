@@ -90,20 +90,43 @@ For example: `http://192.168.1.100:3000`
 
 ## Using the Application
 
+### Direct URLs
+
+The application has two separate views accessible via direct URLs:
+
+- **Slideshow View**: `http://YOUR_PI_IP:3000/slideshow`
+  - Full-screen photo slideshow with no navigation bar
+  - Perfect for the wall display
+  - Auto-updates when photos are added/removed
+  - Press ESC to return to manage view (if needed)
+
+- **Manage View**: `http://YOUR_PI_IP:3000/manage`
+  - Upload, show/hide, and delete photos
+  - Access from your phone, laptop, or any device
+  - Shows notifications when changes are made
+
+- **Root URL**: `http://YOUR_PI_IP:3000/`
+  - Redirects to `/manage` by default
+
 ### For the Wall Display
 
-1. Open the application on your Raspberry Pi's browser
+**Option 1: Direct slideshow URL (Recommended)**
+- Navigate directly to `http://localhost:3000/slideshow`
+- No navigation bar, pure full-screen slideshow
+- Perfect for kiosk mode
+
+**Option 2: Manual navigation**
+1. Go to `http://localhost:3000`
 2. Click **"Slideshow"** in the navigation
 3. Press F11 to enter fullscreen mode
-4. Photos will automatically cycle every 5 seconds
 
 ### Managing Photos
 
-1. Open the application on your phone or laptop at `http://YOUR_PI_IP_ADDRESS:3000`
-2. Click **"Manage Photos"** in the navigation
-3. Upload new photos using the **"+ Upload Photos"** button
-4. Show/hide photos from the slideshow using the eye icon
-5. Delete unwanted photos with the delete button
+1. Open `http://YOUR_PI_IP_ADDRESS:3000/manage` on your phone or laptop
+2. Upload new photos using the **"+ Upload Photos"** button
+3. Show/hide photos from the slideshow using the eye icon
+4. Delete unwanted photos with the delete button
+5. The slideshow on the Pi will auto-update within 5 seconds!
 
 ## Auto-Start on Boot (Optional)
 
@@ -198,7 +221,7 @@ For other desktop environments, the path might be different:
 @xset -dpms
 @xset s noblank
 @sleep 10
-@chromium-browser --kiosk --start-fullscreen --app=http://localhost:3000 --noerrdialogs --disable-infobars --no-first-run --check-for-update-interval=31536000
+@chromium-browser --kiosk --start-fullscreen --app=http://localhost:3000/slideshow --noerrdialogs --disable-infobars --no-first-run --check-for-update-interval=31536000
 ```
 
 **What these do:**
@@ -253,9 +276,9 @@ while ! curl -s http://localhost:3000 > /dev/null; do
     sleep 2
 done
 
-# Launch browser in kiosk mode
+# Launch browser in kiosk mode directly to slideshow
 DISPLAY=:0 chromium-browser --kiosk --start-fullscreen \
-  --app=http://localhost:3000 \
+  --app=http://localhost:3000/slideshow \
   --noerrdialogs --disable-infobars \
   --no-first-run --disable-translate \
   --check-for-update-interval=31536000 &

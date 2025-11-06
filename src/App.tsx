@@ -1,47 +1,64 @@
-import { useState } from 'react'
+import { BrowserRouter, Routes, Route, Navigate, useLocation, useNavigate } from 'react-router-dom'
 import Slideshow from './components/Slideshow'
 import Admin from './components/Admin'
 import './App.css'
 
-function App() {
-  const [view, setView] = useState<'slideshow' | 'admin'>('admin')
-  const [showNav, setShowNav] = useState(true)
+function Navigation() {
+  const location = useLocation()
+  const navigate = useNavigate()
+  const isSlideshow = location.pathname === '/slideshow'
 
-  const handleViewChange = (newView: 'slideshow' | 'admin') => {
-    setView(newView)
-    setShowNav(newView === 'admin')
+  if (isSlideshow) {
+    return null // No navigation bar in slideshow mode
   }
 
   return (
-    <div className="app">
-      <nav className={`nav-bar ${!showNav ? 'hidden' : ''}`}>
-        <div className="nav-content">
-          <h1 className="nav-title">📸 Digital Photo Frame</h1>
-          <div className="nav-buttons">
-            <button
-              className={`nav-btn ${view === 'slideshow' ? 'active' : ''}`}
-              onClick={() => handleViewChange('slideshow')}
-            >
-              Slideshow
-            </button>
-            <button
-              className={`nav-btn ${view === 'admin' ? 'active' : ''}`}
-              onClick={() => handleViewChange('admin')}
-            >
-              Manage Photos
-            </button>
-          </div>
+    <nav className="nav-bar">
+      <div className="nav-content">
+        <h1 className="nav-title">📸 Digital Photo Frame</h1>
+        <div className="nav-buttons">
+          <button
+            className={`nav-btn ${isSlideshow ? 'active' : ''}`}
+            onClick={() => navigate('/slideshow')}
+          >
+            Slideshow
+          </button>
+          <button
+            className={`nav-btn ${location.pathname === '/manage' ? 'active' : ''}`}
+            onClick={() => navigate('/manage')}
+          >
+            Manage Photos
+          </button>
         </div>
-      </nav>
+      </div>
+    </nav>
+  )
+}
 
-      <main className={`main-content ${!showNav ? 'fullscreen' : ''}`}>
-        {view === 'slideshow' ? (
-          <Slideshow onShowNav={() => setShowNav(true)} />
-        ) : (
-          <Admin />
-        )}
+function AppContent() {
+  const location = useLocation()
+  const navigate = useNavigate()
+  const isSlideshow = location.pathname === '/slideshow'
+
+  return (
+    <div className="app">
+      <Navigation />
+      <main className={`main-content ${isSlideshow ? 'fullscreen' : ''}`}>
+        <Routes>
+          <Route path="/slideshow" element={<Slideshow onShowNav={() => navigate('/manage')} />} />
+          <Route path="/manage" element={<Admin />} />
+          <Route path="/" element={<Navigate to="/manage" replace />} />
+        </Routes>
       </main>
     </div>
+  )
+}
+
+function App() {
+  return (
+    <BrowserRouter>
+      <AppContent />
+    </BrowserRouter>
   )
 }
 

@@ -11,7 +11,7 @@ interface Image {
 }
 
 interface SlideshowProps {
-  onShowNav: () => void
+  onShowNav?: () => void
 }
 
 const TRANSITION_DURATION = 5000 // 5 seconds per image
@@ -115,7 +115,7 @@ function Slideshow({ onShowNav }: SlideshowProps) {
           setCurrentIndex((prev) => (prev + 1) % images.length)
           break
         case 'Escape':
-          onShowNav()
+          if (onShowNav) onShowNav()
           break
       }
     }
@@ -179,13 +179,15 @@ function Slideshow({ onShowNav }: SlideshowProps) {
           >
             ›
           </button>
-          <button
-            className="slideshow-exit-btn"
-            onClick={onShowNav}
-            title="Exit (ESC)"
-          >
-            ✕
-          </button>
+          {onShowNav && (
+            <button
+              className="slideshow-exit-btn"
+              onClick={onShowNav}
+              title="Exit (ESC)"
+            >
+              ✕
+            </button>
+          )}
         </div>
       )}
     </div>
