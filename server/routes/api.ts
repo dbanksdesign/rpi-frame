@@ -123,13 +123,14 @@ router.delete('/images/:id', (req: Request, res: Response) => {
   }
 });
 
+// Store display state in memory (since getting status is not reliable across all Pi models)
+let displayState = true;
+
 // Get display power status
 router.get('/display/status', async (req: Request, res: Response) => {
   try {
-    const { stdout } = await execPromise('vcgencmd display_power');
-    // Output format is "display_power=0" or "display_power=1"
-    const isOn = stdout.trim().includes('display_power=1');
-    res.json({ isOn });
+    // Return the stored state
+    res.json({ isOn: displayState });
   } catch (error) {
     console.error('Failed to get display status:', error);
     res.status(500).json({ error: 'Failed to get display status' });
@@ -140,9 +141,79 @@ router.get('/display/status', async (req: Request, res: Response) => {
 router.post('/display/toggle', async (req: Request, res: Response) => {
   try {
     const { power } = req.body; // true for on, false for off
-    const command = `vcgencmd display_power ${power ? '1' : '0'}`;
-    await execPromise(command);
-    res.json({ success: true, isOn: power });
+    
+    // Try multiple methods in order of preference
+    let success = false;
+    let errorMessages: string[] = [];
+
+    // Method 1: Try xset (works when X server is running)
+    if (!success) {
+      try {
+        const xsetCmd = power 
+          ? 'DISPLAY=:0 xset dpms force on' 
+          : 'DISPLAY=:0 xset dpms force off';
+        await execPromise(xsetCmd);
+        success = true;
+        console.log('Display toggled using xset');
+      } catch (error) {
+        errorMessages.push('xset failed');
+      }
+    }
+
+    // Method 2: Try wlr-randr (works for Wayland)
+    if (!success) {
+      try {
+        const wlrCmd = power
+          ? 'WAYLAND_DISPLAY=wayland-1 wlr-randr --output HDMI-A-1 --on'
+          : 'WAYLAND_DISPLAY=wayland-1 wlr-randr --output HDMI-A-1 --off';
+        await execPromise(wlrCmd);
+        success = true;
+        console.log('Display toggled using wlr-randr');
+      } catch (error) {
+        errorMessages.push('wlr-randr failed');
+      }
+    }
+
+    // Method 3: Try vcgencmd (older Raspberry Pi OS)
+    if (!success) {
+      try {
+        const vcgencmd = `vcgencmd display_power ${power ? '1' : '0'}`;
+        await execPromise(vcgencmd);
+        success = true;
+        console.log('Display toggled using vcgencmd');
+      } catch (error) {
+        errorMessages.push('vcgencmd failed');
+      }
+    }
+
+    // Method 4: Try tvservice (HDMI control)
+    if (!success) {
+      try {
+        if (power) {
+          // Turn on HDMI and refresh framebuffer
+          await execPromise('tvservice -p');
+          await execPromise('fbset -depth 8 && fbset -depth 16');
+        } else {
+          // Turn off HDMI
+          await execPromise('tvservice -o');
+        }
+        success = true;
+        console.log('Display toggled using tvservice');
+      } catch (error) {
+        errorMessages.push('tvservice failed');
+      }
+    }
+
+    if (success) {
+      displayState = power;
+      res.json({ success: true, isOn: power });
+    } else {
+      console.error('All display toggle methods failed:', errorMessages);
+      res.status(500).json({ 
+        error: 'Failed to toggle display. Tried: ' + errorMessages.join(', '),
+        details: 'Make sure your user has permission to control the display'
+      });
+    }
   } catch (error) {
     console.error('Failed to toggle display:', error);
     res.status(500).json({ error: 'Failed to toggle display' });
