@@ -121,7 +121,7 @@ function AppContent() {
           <Route path="/" element={<Navigate to="/manage" replace />} />
         </Routes>
       </main>
-      {!displayOn && <div className="display-blanket" />}
+      {!displayOn && isSlideshow && <div className="display-blanket" />}
     </div>
   )
 }
