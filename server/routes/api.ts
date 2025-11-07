@@ -126,6 +126,9 @@ router.delete('/images/:id', (req: Request, res: Response) => {
 // Store display state in memory (since getting status is not reliable across all Pi models)
 let displayState = true;
 
+// Background interval to keep display off if needed
+let keepOffInterval: NodeJS.Timeout | null = null;
+
 // Helper function to find working DISPLAY value
 async function findWorkingDisplay(): Promise<string | null> {
   const displays = [':0', ':1'];
@@ -139,6 +142,20 @@ async function findWorkingDisplay(): Promise<string | null> {
     }
   }
   return null;
+}
+
+// Function to enforce display staying off
+async function enforceDisplayOff() {
+  try {
+    // Check if display is on and turn it off again
+    const { stdout } = await execPromise('wlr-randr');
+    if (stdout.includes('HDMI-A-1') && stdout.includes('enabled')) {
+      console.log('⚠️ Display woke up, turning off again...');
+      await execPromise('wlr-randr --output HDMI-A-1 --off');
+    }
+  } catch (error) {
+    console.error('Error enforcing display off:', error);
+  }
 }
 
 // Get display power status
@@ -166,22 +183,41 @@ router.post('/display/toggle', async (req: Request, res: Response) => {
     if (!success) {
       try {
         if (power) {
-          // Turn display on
-          const { stdout } = await execPromise('wlr-randr --output HDMI-A-1 --on');
-          console.log('wlr-randr output:', stdout);
-        } else {
-          // Turn display off - try both dpms and output off for maximum effect
+          // Turn display on - restore full output
+          await execPromise('wlr-randr --output HDMI-A-1 --on');
+          // Also enable DPMS
           try {
-            // First try to set DPMS off (power saving)
-            await execPromise('wlr-randr --output HDMI-A-1 --dpms off');
-            console.log('wlr-randr: Set DPMS off');
-          } catch (dpmsError) {
-            console.log('wlr-randr: DPMS not supported, using --off instead');
+            await execPromise('wlr-randr --output HDMI-A-1 --dpms on');
+          } catch {
+            // DPMS might not be supported
           }
-          // Then disable the output entirely
+          console.log('wlr-randr: Display ON');
+        } else {
+          // Turn display off - disable output completely
           const { stdout } = await execPromise('wlr-randr --output HDMI-A-1 --off');
           console.log('wlr-randr output:', stdout);
+          
+          // Start a background job to keep checking and turning it off
+          // Some systems (like Wayfire) try to auto-enable the display
+          if (keepOffInterval) {
+            clearInterval(keepOffInterval);
+          }
+          keepOffInterval = setInterval(enforceDisplayOff, 3000); // Check every 3 seconds
+          console.log('Started background enforcement to keep display off');
+          
+          // Wait a moment, then verify it stayed off
+          await new Promise(resolve => setTimeout(resolve, 500));
+          const { stdout: statusCheck } = await execPromise('wlr-randr');
+          console.log('wlr-randr status after OFF:', statusCheck);
         }
+        
+        // If turning ON, stop the enforcement interval
+        if (power && keepOffInterval) {
+          clearInterval(keepOffInterval);
+          keepOffInterval = null;
+          console.log('Stopped background enforcement');
+        }
+        
         success = true;
         successMethod = 'wlr-randr';
         console.log(`✓ Display ${power ? 'ON' : 'OFF'} using wlr-randr`);

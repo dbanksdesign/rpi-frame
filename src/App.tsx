@@ -92,24 +92,42 @@ function AppContent() {
   const isSlideshow = location.pathname === '/slideshow'
   const [displayOn, setDisplayOn] = useState(true)
 
-  // Poll display status periodically
+  // Poll display status periodically, but slow down when display is off
   useEffect(() => {
+    let interval: NodeJS.Timeout
+
     const checkDisplayStatus = async () => {
       try {
         const response = await fetch('/api/display/status')
         const data = await response.json()
+        const wasOff = !displayOn
+        const nowOff = !data.isOn
+        
         setDisplayOn(data.isOn)
+        
+        // If display just turned off, restart interval with longer delay
+        // If display just turned on, restart interval with shorter delay
+        if (wasOff !== nowOff) {
+          clearInterval(interval)
+          if (nowOff) {
+            // When off, check much less frequently to avoid waking display
+            interval = setInterval(checkDisplayStatus, 30000) // Every 30 seconds
+          } else {
+            // When on, check more frequently
+            interval = setInterval(checkDisplayStatus, 5000) // Every 5 seconds
+          }
+        }
       } catch (error) {
         console.error('Failed to check display status:', error)
       }
     }
 
-    // Check immediately and then every 2 seconds
+    // Check immediately and start with 5 second interval
     checkDisplayStatus()
-    const interval = setInterval(checkDisplayStatus, 2000)
+    interval = setInterval(checkDisplayStatus, 5000)
 
     return () => clearInterval(interval)
-  }, [])
+  }, [displayOn])
 
   return (
     <div className="app">
