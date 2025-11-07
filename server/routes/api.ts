@@ -165,11 +165,23 @@ router.post('/display/toggle', async (req: Request, res: Response) => {
     // Method 1: Try wlr-randr FIRST (works for Wayland/Wayfire)
     if (!success) {
       try {
-        const wlrCmd = power
-          ? 'wlr-randr --output HDMI-A-1 --on'
-          : 'wlr-randr --output HDMI-A-1 --off';
-        const { stdout } = await execPromise(wlrCmd);
-        console.log('wlr-randr output:', stdout);
+        if (power) {
+          // Turn display on
+          const { stdout } = await execPromise('wlr-randr --output HDMI-A-1 --on');
+          console.log('wlr-randr output:', stdout);
+        } else {
+          // Turn display off - try both dpms and output off for maximum effect
+          try {
+            // First try to set DPMS off (power saving)
+            await execPromise('wlr-randr --output HDMI-A-1 --dpms off');
+            console.log('wlr-randr: Set DPMS off');
+          } catch (dpmsError) {
+            console.log('wlr-randr: DPMS not supported, using --off instead');
+          }
+          // Then disable the output entirely
+          const { stdout } = await execPromise('wlr-randr --output HDMI-A-1 --off');
+          console.log('wlr-randr output:', stdout);
+        }
         success = true;
         successMethod = 'wlr-randr';
         console.log(`✓ Display ${power ? 'ON' : 'OFF'} using wlr-randr`);

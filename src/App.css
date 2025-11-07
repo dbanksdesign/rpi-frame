@@ -104,6 +104,17 @@
   margin-top: 0;
 }
 
+.display-blanket {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background-color: #000;
+  z-index: 9999;
+  cursor: none;
+}
+
 @media (max-width: 768px) {
   .nav-bar {
     padding: 1rem;

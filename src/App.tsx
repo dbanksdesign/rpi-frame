@@ -90,6 +90,26 @@ function AppContent() {
   const location = useLocation()
   const navigate = useNavigate()
   const isSlideshow = location.pathname === '/slideshow'
+  const [displayOn, setDisplayOn] = useState(true)
+
+  // Poll display status periodically
+  useEffect(() => {
+    const checkDisplayStatus = async () => {
+      try {
+        const response = await fetch('/api/display/status')
+        const data = await response.json()
+        setDisplayOn(data.isOn)
+      } catch (error) {
+        console.error('Failed to check display status:', error)
+      }
+    }
+
+    // Check immediately and then every 2 seconds
+    checkDisplayStatus()
+    const interval = setInterval(checkDisplayStatus, 2000)
+
+    return () => clearInterval(interval)
+  }, [])
 
   return (
     <div className="app">
@@ -101,6 +121,7 @@ function AppContent() {
           <Route path="/" element={<Navigate to="/manage" replace />} />
         </Routes>
       </main>
+      {!displayOn && <div className="display-blanket" />}
     </div>
   )
 }
