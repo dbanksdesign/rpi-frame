@@ -38,10 +38,14 @@ function Navigation() {
       const data = await response.json()
       if (data.success) {
         setDisplayOn(data.isOn)
+        console.log(`Display ${data.isOn ? 'ON' : 'OFF'} via ${data.method}`)
+      } else {
+        console.error('Failed to toggle display:', data)
+        alert(`Failed to toggle display.\n\nAttempted methods:\n${data.attempts?.join('\n') || 'Unknown'}\n\nCheck the server logs for details.`)
       }
     } catch (error) {
       console.error('Failed to toggle display:', error)
-      alert('Failed to toggle display. Make sure you\'re running on a Raspberry Pi.')
+      alert('Failed to toggle display. Make sure you\'re running on a Raspberry Pi and check the server logs.')
     } finally {
       setIsTogglingDisplay(false)
     }

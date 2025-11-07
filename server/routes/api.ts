@@ -144,33 +144,66 @@ router.post('/display/toggle', async (req: Request, res: Response) => {
     
     // Try multiple methods in order of preference
     let success = false;
+    let successMethod = '';
     let errorMessages: string[] = [];
 
-    // Method 1: Try xset (works when X server is running)
+    // Method 1: Try xset with DPMS (works when X server is running)
     if (!success) {
       try {
-        const xsetCmd = power 
-          ? 'DISPLAY=:0 xset dpms force on' 
-          : 'DISPLAY=:0 xset dpms force off';
-        await execPromise(xsetCmd);
+        if (power) {
+          // Turn on display
+          await execPromise('DISPLAY=:0 xset dpms force on');
+          await execPromise('DISPLAY=:0 xset s reset');
+        } else {
+          // Turn off display - disable screensaver first, then force off
+          await execPromise('DISPLAY=:0 xset s off');
+          await execPromise('DISPLAY=:0 xset -dpms');
+          await execPromise('DISPLAY=:0 xset dpms force off');
+        }
         success = true;
-        console.log('Display toggled using xset');
-      } catch (error) {
-        errorMessages.push('xset failed');
+        successMethod = 'xset';
+        console.log(`✓ Display ${power ? 'ON' : 'OFF'} using xset`);
+      } catch (error: any) {
+        const errorMsg = error?.message || String(error);
+        errorMessages.push(`xset: ${errorMsg}`);
+        console.log(`✗ xset failed: ${errorMsg}`);
       }
     }
 
-    // Method 2: Try wlr-randr (works for Wayland)
+    // Method 2: Try tvservice (HDMI control) - often most reliable
     if (!success) {
       try {
-        const wlrCmd = power
-          ? 'WAYLAND_DISPLAY=wayland-1 wlr-randr --output HDMI-A-1 --on'
-          : 'WAYLAND_DISPLAY=wayland-1 wlr-randr --output HDMI-A-1 --off';
-        await execPromise(wlrCmd);
+        if (power) {
+          // Turn on HDMI
+          const { stdout: statusBefore } = await execPromise('tvservice -s');
+          console.log('tvservice status before ON:', statusBefore);
+          
+          await execPromise('tvservice -p');
+          // Give it a moment to power up
+          await new Promise(resolve => setTimeout(resolve, 2000));
+          
+          // Refresh the framebuffer to restore display
+          await execPromise('sudo chvt 6 && sudo chvt 7 || fbset -depth 8 && fbset -depth 16');
+          
+          const { stdout: statusAfter } = await execPromise('tvservice -s');
+          console.log('tvservice status after ON:', statusAfter);
+        } else {
+          // Turn off HDMI
+          const { stdout: statusBefore } = await execPromise('tvservice -s');
+          console.log('tvservice status before OFF:', statusBefore);
+          
+          await execPromise('tvservice -o');
+          
+          const { stdout: statusAfter } = await execPromise('tvservice -s');
+          console.log('tvservice status after OFF:', statusAfter);
+        }
         success = true;
-        console.log('Display toggled using wlr-randr');
-      } catch (error) {
-        errorMessages.push('wlr-randr failed');
+        successMethod = 'tvservice';
+        console.log(`✓ Display ${power ? 'ON' : 'OFF'} using tvservice`);
+      } catch (error: any) {
+        const errorMsg = error?.message || String(error);
+        errorMessages.push(`tvservice: ${errorMsg}`);
+        console.log(`✗ tvservice failed: ${errorMsg}`);
       }
     }
 
@@ -178,40 +211,46 @@ router.post('/display/toggle', async (req: Request, res: Response) => {
     if (!success) {
       try {
         const vcgencmd = `vcgencmd display_power ${power ? '1' : '0'}`;
-        await execPromise(vcgencmd);
+        const { stdout } = await execPromise(vcgencmd);
+        console.log('vcgencmd output:', stdout);
         success = true;
-        console.log('Display toggled using vcgencmd');
-      } catch (error) {
-        errorMessages.push('vcgencmd failed');
+        successMethod = 'vcgencmd';
+        console.log(`✓ Display ${power ? 'ON' : 'OFF'} using vcgencmd`);
+      } catch (error: any) {
+        const errorMsg = error?.message || String(error);
+        errorMessages.push(`vcgencmd: ${errorMsg}`);
+        console.log(`✗ vcgencmd failed: ${errorMsg}`);
       }
     }
 
-    // Method 4: Try tvservice (HDMI control)
+    // Method 4: Try wlr-randr (works for Wayland)
     if (!success) {
       try {
-        if (power) {
-          // Turn on HDMI and refresh framebuffer
-          await execPromise('tvservice -p');
-          await execPromise('fbset -depth 8 && fbset -depth 16');
-        } else {
-          // Turn off HDMI
-          await execPromise('tvservice -o');
-        }
+        const wlrCmd = power
+          ? 'WAYLAND_DISPLAY=wayland-1 wlr-randr --output HDMI-A-1 --on'
+          : 'WAYLAND_DISPLAY=wayland-1 wlr-randr --output HDMI-A-1 --off';
+        await execPromise(wlrCmd);
         success = true;
-        console.log('Display toggled using tvservice');
-      } catch (error) {
-        errorMessages.push('tvservice failed');
+        successMethod = 'wlr-randr';
+        console.log(`✓ Display ${power ? 'ON' : 'OFF'} using wlr-randr`);
+      } catch (error: any) {
+        const errorMsg = error?.message || String(error);
+        errorMessages.push(`wlr-randr: ${errorMsg}`);
+        console.log(`✗ wlr-randr failed: ${errorMsg}`);
       }
     }
 
     if (success) {
       displayState = power;
-      res.json({ success: true, isOn: power });
+      console.log(`✓✓✓ Display successfully ${power ? 'ON' : 'OFF'} via ${successMethod}`);
+      res.json({ success: true, isOn: power, method: successMethod });
     } else {
-      console.error('All display toggle methods failed:', errorMessages);
+      console.error('❌ All display toggle methods failed');
+      console.error('Errors:', errorMessages);
       res.status(500).json({ 
-        error: 'Failed to toggle display. Tried: ' + errorMessages.join(', '),
-        details: 'Make sure your user has permission to control the display'
+        error: 'Failed to toggle display',
+        attempts: errorMessages,
+        details: 'Make sure your user has permission to control the display. You may need to run the server with appropriate permissions.'
       });
     }
   } catch (error) {
