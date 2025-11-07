@@ -3,21 +3,60 @@
 echo "=== Testing Display Control Methods on Raspberry Pi ==="
 echo ""
 
-# Test 1: xset
+# Environment diagnosis
+echo "Environment Diagnosis:"
+echo "  Current user: $(whoami)"
+echo "  DISPLAY env: ${DISPLAY:-not set}"
+echo "  XDG_RUNTIME_DIR: ${XDG_RUNTIME_DIR:-not set}"
+echo "  WAYLAND_DISPLAY: ${WAYLAND_DISPLAY:-not set}"
+echo ""
+
+# Check what's running
+echo "Display Server Detection:"
+if pgrep -x "Xorg" > /dev/null || pgrep -x "X" > /dev/null; then
+    echo "  ✓ X11 is running"
+    ps aux | grep -E "X|Xorg" | grep -v grep | head -1
+fi
+if pgrep -x "wayfire" > /dev/null || pgrep -x "weston" > /dev/null; then
+    echo "  ✓ Wayland compositor is running"
+fi
+if [ -n "$DISPLAY" ]; then
+    echo "  Current DISPLAY: $DISPLAY"
+fi
+echo ""
+
+# Find X displays
+echo "Available X displays:"
+ls -la /tmp/.X11-unix/ 2>/dev/null || echo "  No X11 sockets found"
+echo ""
+
+# Test 1: xset with different DISPLAY values
 echo "Test 1: xset (X11 display power)"
 if command -v xset &> /dev/null; then
     echo "  ✓ xset is installed"
-    echo "  Trying to turn display OFF..."
-    DISPLAY=:0 xset dpms force off 2>&1
-    if [ $? -eq 0 ]; then
-        echo "  ✓ xset command succeeded"
-        sleep 3
-        echo "  Turning display back ON..."
-        DISPLAY=:0 xset dpms force on 2>&1
-        echo "  Status: SUCCESS"
-    else
-        echo "  ✗ xset command failed"
-    fi
+    
+    # Try to find the right DISPLAY
+    for display in ":0" ":1" "$DISPLAY"; do
+        if [ -n "$display" ]; then
+            echo "  Trying DISPLAY=$display..."
+            DISPLAY=$display xset q &> /dev/null
+            if [ $? -eq 0 ]; then
+                echo "    ✓ DISPLAY=$display works!"
+                echo "    Testing display OFF..."
+                DISPLAY=$display xset dpms force off 2>&1
+                if [ $? -eq 0 ]; then
+                    echo "    ✓ Display turned OFF"
+                    sleep 3
+                    echo "    Turning display back ON..."
+                    DISPLAY=$display xset dpms force on 2>&1
+                    echo "    Status: SUCCESS with DISPLAY=$display"
+                    break
+                fi
+            else
+                echo "    ✗ DISPLAY=$display doesn't work"
+            fi
+        fi
+    done
 else
     echo "  ✗ xset not installed"
 fi

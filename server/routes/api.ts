@@ -126,6 +126,21 @@ router.delete('/images/:id', (req: Request, res: Response) => {
 // Store display state in memory (since getting status is not reliable across all Pi models)
 let displayState = true;
 
+// Helper function to find working DISPLAY value
+async function findWorkingDisplay(): Promise<string | null> {
+  const displays = [':0', ':1'];
+  for (const display of displays) {
+    try {
+      await execPromise(`DISPLAY=${display} xset q`);
+      console.log(`Found working DISPLAY: ${display}`);
+      return display;
+    } catch (error) {
+      // This display doesn't work, try next
+    }
+  }
+  return null;
+}
+
 // Get display power status
 router.get('/display/status', async (req: Request, res: Response) => {
   try {
@@ -147,30 +162,7 @@ router.post('/display/toggle', async (req: Request, res: Response) => {
     let successMethod = '';
     let errorMessages: string[] = [];
 
-    // Method 1: Try xset with DPMS (works when X server is running)
-    if (!success) {
-      try {
-        if (power) {
-          // Turn on display
-          await execPromise('DISPLAY=:0 xset dpms force on');
-          await execPromise('DISPLAY=:0 xset s reset');
-        } else {
-          // Turn off display - disable screensaver first, then force off
-          await execPromise('DISPLAY=:0 xset s off');
-          await execPromise('DISPLAY=:0 xset -dpms');
-          await execPromise('DISPLAY=:0 xset dpms force off');
-        }
-        success = true;
-        successMethod = 'xset';
-        console.log(`✓ Display ${power ? 'ON' : 'OFF'} using xset`);
-      } catch (error: any) {
-        const errorMsg = error?.message || String(error);
-        errorMessages.push(`xset: ${errorMsg}`);
-        console.log(`✗ xset failed: ${errorMsg}`);
-      }
-    }
-
-    // Method 2: Try tvservice (HDMI control) - often most reliable
+    // Method 1: Try tvservice FIRST (HDMI control) - often most reliable and doesn't need X server
     if (!success) {
       try {
         if (power) {
@@ -183,7 +175,16 @@ router.post('/display/toggle', async (req: Request, res: Response) => {
           await new Promise(resolve => setTimeout(resolve, 2000));
           
           // Refresh the framebuffer to restore display
-          await execPromise('sudo chvt 6 && sudo chvt 7 || fbset -depth 8 && fbset -depth 16');
+          try {
+            await execPromise('chvt 6 && chvt 7');
+          } catch {
+            // Fallback to fbset if chvt requires sudo
+            try {
+              await execPromise('fbset -depth 8 && fbset -depth 16');
+            } catch {
+              console.log('Could not refresh framebuffer, but display should still be on');
+            }
+          }
           
           const { stdout: statusAfter } = await execPromise('tvservice -s');
           console.log('tvservice status after ON:', statusAfter);
@@ -204,6 +205,35 @@ router.post('/display/toggle', async (req: Request, res: Response) => {
         const errorMsg = error?.message || String(error);
         errorMessages.push(`tvservice: ${errorMsg}`);
         console.log(`✗ tvservice failed: ${errorMsg}`);
+      }
+    }
+
+    // Method 2: Try xset with auto-detected DISPLAY (works when X server is running)
+    if (!success) {
+      try {
+        const display = await findWorkingDisplay();
+        if (display) {
+          if (power) {
+            // Turn on display
+            await execPromise(`DISPLAY=${display} xset dpms force on`);
+            await execPromise(`DISPLAY=${display} xset s reset`);
+          } else {
+            // Turn off display - disable screensaver first, then force off
+            await execPromise(`DISPLAY=${display} xset s off`);
+            await execPromise(`DISPLAY=${display} xset -dpms`);
+            await execPromise(`DISPLAY=${display} xset dpms force off`);
+          }
+          success = true;
+          successMethod = `xset (${display})`;
+          console.log(`✓ Display ${power ? 'ON' : 'OFF'} using xset with ${display}`);
+        } else {
+          errorMessages.push('xset: No working DISPLAY found');
+          console.log('✗ xset failed: No working DISPLAY found');
+        }
+      } catch (error: any) {
+        const errorMsg = error?.message || String(error);
+        errorMessages.push(`xset: ${errorMsg}`);
+        console.log(`✗ xset failed: ${errorMsg}`);
       }
     }
 
