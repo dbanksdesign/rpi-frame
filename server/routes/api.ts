@@ -162,7 +162,25 @@ router.post('/display/toggle', async (req: Request, res: Response) => {
     let successMethod = '';
     let errorMessages: string[] = [];
 
-    // Method 1: Try tvservice FIRST (HDMI control) - often most reliable and doesn't need X server
+    // Method 1: Try wlr-randr FIRST (works for Wayland/Wayfire)
+    if (!success) {
+      try {
+        const wlrCmd = power
+          ? 'wlr-randr --output HDMI-A-1 --on'
+          : 'wlr-randr --output HDMI-A-1 --off';
+        const { stdout } = await execPromise(wlrCmd);
+        console.log('wlr-randr output:', stdout);
+        success = true;
+        successMethod = 'wlr-randr';
+        console.log(`✓ Display ${power ? 'ON' : 'OFF'} using wlr-randr`);
+      } catch (error: any) {
+        const errorMsg = error?.message || String(error);
+        errorMessages.push(`wlr-randr: ${errorMsg}`);
+        console.log(`✗ wlr-randr failed: ${errorMsg}`);
+      }
+    }
+
+    // Method 2: Try tvservice (HDMI control) - fallback for older systems
     if (!success) {
       try {
         if (power) {
@@ -208,7 +226,7 @@ router.post('/display/toggle', async (req: Request, res: Response) => {
       }
     }
 
-    // Method 2: Try xset with auto-detected DISPLAY (works when X server is running)
+    // Method 3: Try xset with auto-detected DISPLAY (works when X server is running)
     if (!success) {
       try {
         const display = await findWorkingDisplay();
@@ -237,7 +255,7 @@ router.post('/display/toggle', async (req: Request, res: Response) => {
       }
     }
 
-    // Method 3: Try vcgencmd (older Raspberry Pi OS)
+    // Method 4: Try vcgencmd (older Raspberry Pi OS)
     if (!success) {
       try {
         const vcgencmd = `vcgencmd display_power ${power ? '1' : '0'}`;
@@ -250,23 +268,6 @@ router.post('/display/toggle', async (req: Request, res: Response) => {
         const errorMsg = error?.message || String(error);
         errorMessages.push(`vcgencmd: ${errorMsg}`);
         console.log(`✗ vcgencmd failed: ${errorMsg}`);
-      }
-    }
-
-    // Method 4: Try wlr-randr (works for Wayland)
-    if (!success) {
-      try {
-        const wlrCmd = power
-          ? 'WAYLAND_DISPLAY=wayland-1 wlr-randr --output HDMI-A-1 --on'
-          : 'WAYLAND_DISPLAY=wayland-1 wlr-randr --output HDMI-A-1 --off';
-        await execPromise(wlrCmd);
-        success = true;
-        successMethod = 'wlr-randr';
-        console.log(`✓ Display ${power ? 'ON' : 'OFF'} using wlr-randr`);
-      } catch (error: any) {
-        const errorMsg = error?.message || String(error);
-        errorMessages.push(`wlr-randr: ${errorMsg}`);
-        console.log(`✗ wlr-randr failed: ${errorMsg}`);
       }
     }
 
