@@ -1,4 +1,5 @@
 import { BrowserRouter, Routes, Route, Navigate, useLocation, useNavigate } from 'react-router-dom'
+import { useState, useEffect } from 'react'
 import Slideshow from './components/Slideshow'
 import Admin from './components/Admin'
 import './App.css'
@@ -7,6 +8,44 @@ function Navigation() {
   const location = useLocation()
   const navigate = useNavigate()
   const isSlideshow = location.pathname === '/slideshow'
+  const [displayOn, setDisplayOn] = useState(true)
+  const [isTogglingDisplay, setIsTogglingDisplay] = useState(false)
+
+  // Fetch initial display status
+  useEffect(() => {
+    const fetchDisplayStatus = async () => {
+      try {
+        const response = await fetch('/api/display/status')
+        const data = await response.json()
+        setDisplayOn(data.isOn)
+      } catch (error) {
+        console.error('Failed to fetch display status:', error)
+      }
+    }
+    fetchDisplayStatus()
+  }, [])
+
+  const toggleDisplay = async () => {
+    setIsTogglingDisplay(true)
+    try {
+      const response = await fetch('/api/display/toggle', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ power: !displayOn }),
+      })
+      const data = await response.json()
+      if (data.success) {
+        setDisplayOn(data.isOn)
+      }
+    } catch (error) {
+      console.error('Failed to toggle display:', error)
+      alert('Failed to toggle display. Make sure you\'re running on a Raspberry Pi.')
+    } finally {
+      setIsTogglingDisplay(false)
+    }
+  }
 
   if (isSlideshow) {
     return null // No navigation bar in slideshow mode
@@ -28,6 +67,14 @@ function Navigation() {
             onClick={() => navigate('/manage')}
           >
             Manage Photos
+          </button>
+          <button
+            className={`nav-btn display-toggle ${displayOn ? 'on' : 'off'}`}
+            onClick={toggleDisplay}
+            disabled={isTogglingDisplay}
+            title={displayOn ? 'Turn display off' : 'Turn display on'}
+          >
+            {isTogglingDisplay ? '...' : displayOn ? '🖥️ Display On' : '🖥️ Display Off'}
           </button>
         </div>
       </div>

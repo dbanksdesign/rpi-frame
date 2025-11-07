@@ -32,6 +32,7 @@ DISPLAY=:0 chromium-browser \
   --check-for-update-interval=31536000 \
   --disable-features=TranslateUI \
   --disable-restore-session-state \
+  --password-store=basic \
   --incognito &
 
 echo "Browser launched!"

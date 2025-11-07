@@ -64,6 +64,35 @@
   border-color: #4a9eff;
 }
 
+.nav-btn.display-toggle {
+  font-weight: 600;
+}
+
+.nav-btn.display-toggle.on {
+  background-color: #2d5a2d;
+  border-color: #3a7a3a;
+}
+
+.nav-btn.display-toggle.on:hover {
+  background-color: #3a7a3a;
+  border-color: #4a9a4a;
+}
+
+.nav-btn.display-toggle.off {
+  background-color: #5a2d2d;
+  border-color: #7a3a3a;
+}
+
+.nav-btn.display-toggle.off:hover {
+  background-color: #7a3a3a;
+  border-color: #9a4a4a;
+}
+
+.nav-btn.display-toggle:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
 .main-content {
   flex: 1;
   width: 100%;

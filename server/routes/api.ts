@@ -2,8 +2,12 @@ import express, { Request, Response } from 'express';
 import multer from 'multer';
 import path from 'path';
 import fs from 'fs';
+import { exec } from 'child_process';
+import { promisify } from 'util';
 import { ImageMetadata, getImages, saveImages, addImage, removeImage, toggleImageActive } from '../utils/imageStore';
 import { getProjectRoot } from '../utils/filesystem';
+
+const execPromise = promisify(exec);
 
 export const router = express.Router();
 
@@ -116,6 +120,32 @@ router.delete('/images/:id', (req: Request, res: Response) => {
     res.json({ success: true });
   } catch (error) {
     res.status(500).json({ error: 'Failed to delete image' });
+  }
+});
+
+// Get display power status
+router.get('/display/status', async (req: Request, res: Response) => {
+  try {
+    const { stdout } = await execPromise('vcgencmd display_power');
+    // Output format is "display_power=0" or "display_power=1"
+    const isOn = stdout.trim().includes('display_power=1');
+    res.json({ isOn });
+  } catch (error) {
+    console.error('Failed to get display status:', error);
+    res.status(500).json({ error: 'Failed to get display status' });
+  }
+});
+
+// Toggle display power
+router.post('/display/toggle', async (req: Request, res: Response) => {
+  try {
+    const { power } = req.body; // true for on, false for off
+    const command = `vcgencmd display_power ${power ? '1' : '0'}`;
+    await execPromise(command);
+    res.json({ success: true, isOn: power });
+  } catch (error) {
+    console.error('Failed to toggle display:', error);
+    res.status(500).json({ error: 'Failed to toggle display' });
   }
 });
 
