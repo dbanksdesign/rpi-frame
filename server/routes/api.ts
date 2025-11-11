@@ -4,7 +4,25 @@ import path from 'path';
 import fs from 'fs';
 import { exec } from 'child_process';
 import { promisify } from 'util';
-import { ImageMetadata, getImages, saveImages, addImage, removeImage, toggleImageActive } from '../utils/imageStore';
+import { 
+  ImageMetadata, 
+  Collection,
+  getImages, 
+  saveImages, 
+  addImage, 
+  removeImage, 
+  toggleImageActive, 
+  getSlideshowState, 
+  setCurrentImage, 
+  setSlideshowDuration,
+  getCollections,
+  addCollection,
+  updateCollection,
+  removeCollection,
+  addImageToCollection,
+  removeImageFromCollection,
+  setActiveCollection
+} from '../utils/imageStore';
 import { getProjectRoot } from '../utils/filesystem';
 
 const execPromise = promisify(exec);
@@ -52,10 +70,177 @@ router.get('/images', (req: Request, res: Response) => {
 // Get active images only (for slideshow)
 router.get('/images/active', (req: Request, res: Response) => {
   try {
-    const images = getImages().filter(img => img.active);
+    const { collectionId } = req.query;
+    let images = getImages().filter(img => img.active);
+    
+    // Filter by collection if specified
+    if (collectionId && typeof collectionId === 'string') {
+      images = images.filter(img => 
+        img.collectionIds && img.collectionIds.includes(collectionId)
+      );
+    }
+    
     res.json(images);
   } catch (error) {
     res.status(500).json({ error: 'Failed to fetch active images' });
+  }
+});
+
+// Get slideshow state (current image and duration)
+router.get('/slideshow/state', (req: Request, res: Response) => {
+  try {
+    const state = getSlideshowState();
+    res.json(state);
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to fetch slideshow state' });
+  }
+});
+
+// Set current image in slideshow
+router.post('/slideshow/current', (req: Request, res: Response) => {
+  try {
+    const { imageId } = req.body;
+    setCurrentImage(imageId);
+    res.json({ success: true, currentImageId: imageId });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to set current image' });
+  }
+});
+
+// Set slideshow duration
+router.post('/slideshow/duration', (req: Request, res: Response) => {
+  try {
+    const { duration } = req.body;
+    if (typeof duration !== 'number' || duration < 1000) {
+      return res.status(400).json({ error: 'Duration must be at least 1000ms' });
+    }
+    setSlideshowDuration(duration);
+    res.json({ success: true, duration });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to set slideshow duration' });
+  }
+});
+
+// Set active collection for slideshow
+router.post('/slideshow/collection', (req: Request, res: Response) => {
+  try {
+    const { collectionId } = req.body;
+    setActiveCollection(collectionId);
+    res.json({ success: true, activeCollectionId: collectionId });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to set active collection' });
+  }
+});
+
+// ========== Collection Management Routes ==========
+
+// Get all collections
+router.get('/collections', (req: Request, res: Response) => {
+  try {
+    const collections = getCollections();
+    res.json(collections);
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to fetch collections' });
+  }
+});
+
+// Create new collection
+router.post('/collections', (req: Request, res: Response) => {
+  try {
+    const { name, description } = req.body;
+    
+    if (!name || typeof name !== 'string' || name.trim() === '') {
+      return res.status(400).json({ error: 'Collection name is required' });
+    }
+    
+    const collection: Collection = {
+      id: Date.now() + '-' + Math.round(Math.random() * 1E9),
+      name: name.trim(),
+      description: description?.trim() || undefined,
+      createdAt: new Date().toISOString(),
+    };
+    
+    addCollection(collection);
+    res.json(collection);
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to create collection' });
+  }
+});
+
+// Update collection
+router.patch('/collections/:id', (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+    const { name, description } = req.body;
+    
+    const updates: Partial<Omit<Collection, 'id'>> = {};
+    if (name !== undefined) {
+      if (typeof name !== 'string' || name.trim() === '') {
+        return res.status(400).json({ error: 'Collection name cannot be empty' });
+      }
+      updates.name = name.trim();
+    }
+    if (description !== undefined) {
+      updates.description = description?.trim() || undefined;
+    }
+    
+    const success = updateCollection(id, updates);
+    
+    if (success) {
+      res.json({ success: true });
+    } else {
+      res.status(404).json({ error: 'Collection not found' });
+    }
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to update collection' });
+  }
+});
+
+// Delete collection
+router.delete('/collections/:id', (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+    const success = removeCollection(id);
+    
+    if (success) {
+      res.json({ success: true });
+    } else {
+      res.status(404).json({ error: 'Collection not found' });
+    }
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to delete collection' });
+  }
+});
+
+// Add image to collection
+router.post('/collections/:collectionId/images/:imageId', (req: Request, res: Response) => {
+  try {
+    const { collectionId, imageId } = req.params;
+    const success = addImageToCollection(imageId, collectionId);
+    
+    if (success) {
+      res.json({ success: true });
+    } else {
+      res.status(404).json({ error: 'Image not found' });
+    }
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to add image to collection' });
+  }
+});
+
+// Remove image from collection
+router.delete('/collections/:collectionId/images/:imageId', (req: Request, res: Response) => {
+  try {
+    const { collectionId, imageId } = req.params;
+    const success = removeImageFromCollection(imageId, collectionId);
+    
+    if (success) {
+      res.json({ success: true });
+    } else {
+      res.status(404).json({ error: 'Image not found or not in collection' });
+    }
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to remove image from collection' });
   }
 });
 
@@ -72,7 +257,8 @@ router.post('/images/upload', upload.single('image'), (req: Request, res: Respon
       originalName: req.file.originalname,
       path: `/uploads/${req.file.filename}`,
       uploadedAt: new Date().toISOString(),
-      active: true
+      active: true,
+      collectionIds: []
     };
 
     addImage(imageMetadata);

@@ -1,7 +1,11 @@
 import { BrowserRouter, Routes, Route, Navigate, useLocation, useNavigate } from 'react-router-dom'
 import { useState, useEffect } from 'react'
+import { AppShell, Group, Title, Button, ActionIcon, useMantineColorScheme, Box } from '@mantine/core'
+import { IconSun, IconMoon, IconPhoto, IconSettings, IconDeviceDesktop, IconDeviceDesktopOff, IconFrame } from '@tabler/icons-react'
+import { useMediaQuery } from '@mantine/hooks'
 import Slideshow from './components/Slideshow'
 import Admin from './components/Admin'
+import ErrorBoundary from './components/ErrorBoundary'
 import './App.css'
 
 function Navigation() {
@@ -10,6 +14,8 @@ function Navigation() {
   const isSlideshow = location.pathname === '/slideshow'
   const [displayOn, setDisplayOn] = useState(true)
   const [isTogglingDisplay, setIsTogglingDisplay] = useState(false)
+  const { colorScheme, toggleColorScheme } = useMantineColorScheme()
+  const isMobile = useMediaQuery('(max-width: 768px)')
 
   // Fetch initial display status
   useEffect(() => {
@@ -56,33 +62,91 @@ function Navigation() {
   }
 
   return (
-    <nav className="nav-bar">
-      <div className="nav-content">
-        <h1 className="nav-title">📸 Digital Photo Frame</h1>
-        <div className="nav-buttons">
-          <button
-            className={`nav-btn ${isSlideshow ? 'active' : ''}`}
-            onClick={() => navigate('/slideshow')}
-          >
-            Slideshow
-          </button>
-          <button
-            className={`nav-btn ${location.pathname === '/manage' ? 'active' : ''}`}
-            onClick={() => navigate('/manage')}
-          >
-            Manage Photos
-          </button>
-          <button
-            className={`nav-btn display-toggle ${displayOn ? 'on' : 'off'}`}
-            onClick={toggleDisplay}
-            disabled={isTogglingDisplay}
-            title={displayOn ? 'Turn display off' : 'Turn display on'}
-          >
-            {isTogglingDisplay ? '...' : displayOn ? '🖥️ Display On' : '🖥️ Display Off'}
-          </button>
-        </div>
-      </div>
-    </nav>
+    <AppShell.Header p="md">
+      <Group justify="space-between" h="100%" wrap="nowrap">
+        <Group gap="xs" wrap="nowrap">
+          <IconFrame size={28} stroke={2} />
+          <Title order={2} size={isMobile ? 'h4' : 'h3'} style={{ whiteSpace: 'nowrap' }}>
+            Frame
+          </Title>
+        </Group>
+        <Group gap="xs" wrap="nowrap">
+          {isMobile ? (
+            <>
+              <ActionIcon
+                variant={location.pathname === '/slideshow' ? 'filled' : 'light'}
+                size="lg"
+                onClick={() => navigate('/slideshow')}
+                title="Slideshow"
+              >
+                <IconPhoto size={18} />
+              </ActionIcon>
+              <ActionIcon
+                variant={location.pathname === '/manage' ? 'filled' : 'light'}
+                size="lg"
+                onClick={() => navigate('/manage')}
+                title="Manage Photos"
+              >
+                <IconSettings size={18} />
+              </ActionIcon>
+              <ActionIcon
+                variant="light"
+                color={displayOn ? 'green' : 'red'}
+                size="lg"
+                onClick={toggleDisplay}
+                loading={isTogglingDisplay}
+                title={displayOn ? 'Turn display off' : 'Turn display on'}
+              >
+                {displayOn ? <IconDeviceDesktop size={18} /> : <IconDeviceDesktopOff size={18} />}
+              </ActionIcon>
+              <ActionIcon
+                variant="light"
+                size="lg"
+                onClick={() => toggleColorScheme()}
+                title="Toggle color scheme"
+              >
+                {colorScheme === 'dark' ? <IconSun size={18} /> : <IconMoon size={18} />}
+              </ActionIcon>
+            </>
+          ) : (
+            <>
+              <Button
+                variant={location.pathname === '/slideshow' ? 'filled' : 'light'}
+                leftSection={<IconPhoto size={18} />}
+                onClick={() => navigate('/slideshow')}
+              >
+                Slideshow
+              </Button>
+              <Button
+                variant={location.pathname === '/manage' ? 'filled' : 'light'}
+                leftSection={<IconSettings size={18} />}
+                onClick={() => navigate('/manage')}
+              >
+                Manage Photos
+              </Button>
+              <Button
+                variant="light"
+                color={displayOn ? 'green' : 'red'}
+                leftSection={displayOn ? <IconDeviceDesktop size={18} /> : <IconDeviceDesktopOff size={18} />}
+                onClick={toggleDisplay}
+                loading={isTogglingDisplay}
+                title={displayOn ? 'Turn display off' : 'Turn display on'}
+              >
+                Display {displayOn ? 'On' : 'Off'}
+              </Button>
+              <ActionIcon
+                variant="light"
+                size="lg"
+                onClick={() => toggleColorScheme()}
+                title="Toggle color scheme"
+              >
+                {colorScheme === 'dark' ? <IconSun size={18} /> : <IconMoon size={18} />}
+              </ActionIcon>
+            </>
+          )}
+        </Group>
+      </Group>
+    </AppShell.Header>
   )
 }
 
@@ -129,18 +193,35 @@ function AppContent() {
     return () => clearInterval(interval)
   }, [displayOn])
 
+  if (isSlideshow) {
+    return (
+      <Box pos="relative">
+        <ErrorBoundary>
+          <Slideshow onShowNav={() => navigate('/manage')} />
+        </ErrorBoundary>
+        {!displayOn && <div className="display-blanket" />}
+      </Box>
+    )
+  }
+
   return (
-    <div className="app">
+    <AppShell
+      header={{ height: 70 }}
+      padding="md"
+    >
       <Navigation />
-      <main className={`main-content ${isSlideshow ? 'fullscreen' : ''}`}>
+      <AppShell.Main>
         <Routes>
-          <Route path="/slideshow" element={<Slideshow onShowNav={() => navigate('/manage')} />} />
+          <Route path="/slideshow" element={
+            <ErrorBoundary>
+              <Slideshow onShowNav={() => navigate('/manage')} />
+            </ErrorBoundary>
+          } />
           <Route path="/manage" element={<Admin />} />
           <Route path="/" element={<Navigate to="/manage" replace />} />
         </Routes>
-      </main>
-      {!displayOn && isSlideshow && <div className="display-blanket" />}
-    </div>
+      </AppShell.Main>
+    </AppShell>
   )
 }
 
