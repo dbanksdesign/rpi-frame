@@ -4,12 +4,13 @@
 sleep 5
 
 # Disable screen blanking
-xset s off
-xset -dpms
-xset s noblank
+xset s off          # Disable screensaver
+xset +dpms          # ENABLE DPMS (instead of -dpms)
+xset s noblank      # Prevent automatic blanking
+xset dpms 0 0 0     # Set all DPMS timeouts to 0 (never auto-trigger)
 
 # Hide cursor after 0.1 seconds of inactivity
-unclutter -idle 0.1 -root &
+DISPLAY=:0 unclutter -idle 0.1 -root &
 
 # Wait for server to be ready and actually responding
 echo "Waiting for photo frame server..."
