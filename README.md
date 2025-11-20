@@ -32,6 +32,11 @@ sudo apt update
 sudo apt install chromium-browser -y
 ```
 
+If you want to hide the cursor (recommended for photo frame displays):
+```bash
+sudo apt install unclutter -y
+```
+
 ## Installation
 
 1. **Clone or download this project to your Raspberry Pi**
@@ -196,6 +201,15 @@ sudo systemctl restart photo-frame.service
 
 To automatically open the slideshow in fullscreen when the Pi boots:
 
+### Prerequisites
+
+**Install unclutter to hide the cursor:**
+```bash
+sudo apt install unclutter -y
+```
+
+This will automatically hide the mouse cursor, which is essential for a clean photo frame display.
+
 ### Method 1: Using autostart (Raspberry Pi Desktop)
 
 1. **First, check which desktop environment you're using:**
@@ -220,12 +234,14 @@ For other desktop environments, the path might be different:
 @xset s off
 @xset -dpms
 @xset s noblank
+@unclutter -idle 0.1 -root
 @sleep 10
 @chromium-browser --kiosk --start-fullscreen --app=http://localhost:3000/slideshow --noerrdialogs --disable-infobars --no-first-run --check-for-update-interval=31536000
 ```
 
 **What these do:**
 - `xset` commands: Disable screen blanking and power saving
+- `unclutter`: Hide the mouse cursor after 0.1 seconds of inactivity
 - `sleep 10`: Wait 10 seconds for the server to fully start
 - `--kiosk`: Full screen mode without browser UI
 - `--noerrdialogs`: Suppress error dialogs
@@ -269,6 +285,9 @@ sleep 15
 xset s off
 xset -dpms
 xset s noblank
+
+# Hide cursor
+unclutter -idle 0.1 -root &
 
 # Wait for server to be ready
 while ! curl -s http://localhost:3000 > /dev/null; do

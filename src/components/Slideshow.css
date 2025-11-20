@@ -9,8 +9,8 @@
   cursor: none;
 }
 
-.slideshow-container:hover {
-  cursor: default;
+.slideshow-container * {
+  cursor: none !important;
 }
 
 .slideshow-image {

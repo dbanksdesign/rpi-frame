@@ -1,12 +1,15 @@
 #!/bin/bash
 
 # Wait for desktop to fully load
-sleep 20
+sleep 5
 
 # Disable screen blanking
 xset s off
 xset -dpms
 xset s noblank
+
+# Hide cursor after 0.1 seconds of inactivity
+unclutter -idle 0.1 -root &
 
 # Wait for server to be ready and actually responding
 echo "Waiting for photo frame server..."
