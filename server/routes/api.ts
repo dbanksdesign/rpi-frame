@@ -366,47 +366,58 @@ router.post('/display/toggle', async (req: Request, res: Response) => {
     let errorMessages: string[] = [];
 
     // Method 1: Try wlr-randr FIRST (works for Wayland/Wayfire)
+    // Use helper script to run with proper permissions
     if (!success) {
       try {
-        if (power) {
-          // Turn display on - restore full output
-          await execPromise('wlr-randr --output HDMI-A-1 --on');
-          // Also enable DPMS
-          try {
-            await execPromise('wlr-randr --output HDMI-A-1 --dpms on');
-          } catch {
-            // DPMS might not be supported
-          }
-          console.log('wlr-randr: Display ON');
+        const scriptPath = path.join(getProjectRoot(), 'control-display.sh');
+        if (fs.existsSync(scriptPath)) {
+          const action = power ? 'on' : 'off';
+          await execPromise(`${scriptPath} ${action}`);
+          success = true;
+          successMethod = 'wlr-randr (via helper)';
+          console.log(`✓ Display ${power ? 'ON' : 'OFF'} using wlr-randr via helper script`);
         } else {
-          // Turn display off - disable output completely
-          const { stdout } = await execPromise('wlr-randr --output HDMI-A-1 --off');
-          console.log('wlr-randr output:', stdout);
-          
-          // Start a background job to keep checking and turning it off
-          // Some systems (like Wayfire) try to auto-enable the display
-          if (keepOffInterval) {
-            clearInterval(keepOffInterval);
+          // Fallback to direct command (may not work due to permissions)
+          if (power) {
+            // Turn display on - restore full output
+            await execPromise('wlr-randr --output HDMI-A-1 --on');
+            // Also enable DPMS
+            try {
+              await execPromise('wlr-randr --output HDMI-A-1 --dpms on');
+            } catch {
+              // DPMS might not be supported
+            }
+            console.log('wlr-randr: Display ON');
+          } else {
+            // Turn display off - disable output completely
+            const { stdout } = await execPromise('wlr-randr --output HDMI-A-1 --off');
+            console.log('wlr-randr output:', stdout);
+            
+            // Start a background job to keep checking and turning it off
+            // Some systems (like Wayfire) try to auto-enable the display
+            if (keepOffInterval) {
+              clearInterval(keepOffInterval);
+            }
+            keepOffInterval = setInterval(enforceDisplayOff, 3000); // Check every 3 seconds
+            console.log('Started background enforcement to keep display off');
+            
+            // Wait a moment, then verify it stayed off
+            await new Promise(resolve => setTimeout(resolve, 500));
+            const { stdout: statusCheck } = await execPromise('wlr-randr');
+            console.log('wlr-randr status after OFF:', statusCheck);
           }
-          keepOffInterval = setInterval(enforceDisplayOff, 3000); // Check every 3 seconds
-          console.log('Started background enforcement to keep display off');
           
-          // Wait a moment, then verify it stayed off
-          await new Promise(resolve => setTimeout(resolve, 500));
-          const { stdout: statusCheck } = await execPromise('wlr-randr');
-          console.log('wlr-randr status after OFF:', statusCheck);
+          // If turning ON, stop the enforcement interval
+          if (power && keepOffInterval) {
+            clearInterval(keepOffInterval);
+            keepOffInterval = null;
+            console.log('Stopped background enforcement');
+          }
+          
+          success = true;
+          successMethod = 'wlr-randr';
+          console.log(`✓ Display ${power ? 'ON' : 'OFF'} using wlr-randr`);
         }
-        
-        // If turning ON, stop the enforcement interval
-        if (power && keepOffInterval) {
-          clearInterval(keepOffInterval);
-          keepOffInterval = null;
-          console.log('Stopped background enforcement');
-        }
-        
-        success = true;
-        successMethod = 'wlr-randr';
-        console.log(`✓ Display ${power ? 'ON' : 'OFF'} using wlr-randr`);
       } catch (error: any) {
         const errorMsg = error?.message || String(error);
         errorMessages.push(`wlr-randr: ${errorMsg}`);
