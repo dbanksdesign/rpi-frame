@@ -19,6 +19,7 @@ const UPLOADS_DIR = path.join(PROJECT_ROOT, 'uploads');
 let currentProcess = null;
 let currentImageId = null;
 let displayState = 'on';
+let currentDuration = 120000; // Track current duration
 
 // Log with timestamp
 function log(message) {
@@ -101,6 +102,110 @@ function displayImage(imagePath) {
   });
 }
 
+// Turn off the display using system commands
+async function turnOffDisplay() {
+  killCurrentDisplay();
+  
+  try {
+    // Try multiple methods to turn off display
+    // Method 1: Try wlr-randr (Wayland)
+    try {
+      const { execSync } = require('child_process');
+      execSync('wlr-randr --output HDMI-A-1 --off', { stdio: 'ignore' });
+      log('Display turned OFF using wlr-randr');
+      return;
+    } catch (err) {
+      // Try next method
+    }
+    
+    // Method 2: Try tvservice (older Pi OS)
+    try {
+      const { execSync } = require('child_process');
+      execSync('tvservice -o', { stdio: 'ignore' });
+      log('Display turned OFF using tvservice');
+      return;
+    } catch (err) {
+      // Try next method
+    }
+    
+    // Method 3: Try xset (X11)
+    try {
+      const { execSync } = require('child_process');
+      execSync('DISPLAY=:0 xset dpms force off', { stdio: 'ignore' });
+      log('Display turned OFF using xset');
+      return;
+    } catch (err) {
+      // Try next method
+    }
+    
+    // Method 4: Try vcgencmd (legacy)
+    try {
+      const { execSync } = require('child_process');
+      execSync('vcgencmd display_power 0', { stdio: 'ignore' });
+      log('Display turned OFF using vcgencmd');
+      return;
+    } catch (err) {
+      log('Could not turn off display - all methods failed');
+    }
+  } catch (error) {
+    log(`Error turning off display: ${error.message}`);
+  }
+}
+
+// Turn on the display using system commands
+async function turnOnDisplay() {
+  try {
+    // Try multiple methods to turn on display
+    // Method 1: Try wlr-randr (Wayland)
+    try {
+      const { execSync } = require('child_process');
+      execSync('wlr-randr --output HDMI-A-1 --on', { stdio: 'ignore' });
+      log('Display turned ON using wlr-randr');
+      return;
+    } catch (err) {
+      // Try next method
+    }
+    
+    // Method 2: Try tvservice (older Pi OS)
+    try {
+      const { execSync } = require('child_process');
+      execSync('tvservice -p', { stdio: 'ignore' });
+      // Refresh framebuffer
+      setTimeout(() => {
+        try {
+          execSync('fbset -depth 8 && fbset -depth 16', { stdio: 'ignore' });
+        } catch (e) {}
+      }, 1000);
+      log('Display turned ON using tvservice');
+      return;
+    } catch (err) {
+      // Try next method
+    }
+    
+    // Method 3: Try xset (X11)
+    try {
+      const { execSync } = require('child_process');
+      execSync('DISPLAY=:0 xset dpms force on', { stdio: 'ignore' });
+      log('Display turned ON using xset');
+      return;
+    } catch (err) {
+      // Try next method
+    }
+    
+    // Method 4: Try vcgencmd (legacy)
+    try {
+      const { execSync } = require('child_process');
+      execSync('vcgencmd display_power 1', { stdio: 'ignore' });
+      log('Display turned ON using vcgencmd');
+      return;
+    } catch (err) {
+      log('Could not turn on display - all methods failed');
+    }
+  } catch (error) {
+    log(`Error turning on display: ${error.message}`);
+  }
+}
+
 // Clear the display (show black screen)
 function clearDisplay() {
   killCurrentDisplay();
@@ -163,7 +268,10 @@ async function updateDisplay() {
       
       if (displayState === 'off') {
         clearDisplay();
+        await turnOffDisplay();
         return;
+      } else {
+        await turnOnDisplay();
       }
     }
 
@@ -178,7 +286,15 @@ async function updateDisplay() {
       return;
     }
 
-    const { currentImageId: newImageId } = state;
+    const { currentImageId: newImageId, duration: newDuration } = state;
+
+    // Check if duration changed
+    if (newDuration && newDuration !== currentDuration) {
+      log(`Duration changed from ${currentDuration}ms to ${newDuration}ms`);
+      currentDuration = newDuration;
+      // Restart slideshow with new duration
+      await startLocalSlideshow();
+    }
 
     // If image changed, update display
     if (newImageId && newImageId !== currentImageId) {
@@ -210,6 +326,7 @@ async function startLocalSlideshow() {
   if (!state) return;
 
   const duration = state.duration || 120000;
+  currentDuration = duration; // Update tracked duration
   const images = await fetchActiveImages();
 
   if (images.length === 0) {
@@ -230,6 +347,26 @@ async function startLocalSlideshow() {
   // Clear existing interval
   if (localSlideshowInterval) {
     clearInterval(localSlideshowInterval);
+    localSlideshowInterval = null;
+  }
+
+  // For single image, just display it without rotation
+  if (images.length === 1) {
+    const image = images[0];
+    currentImageId = image.id;
+    const imagePath = path.join(UPLOADS_DIR, image.filename);
+    try {
+      await displayImage(imagePath);
+      await fetch(`${SERVER_URL}/api/slideshow/current`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ imageId: image.id }),
+      }).catch(() => {});
+    } catch (err) {
+      log(`Failed to display single image: ${err.message}`);
+    }
+    log(`Single image mode: ${image.filename}`);
+    return;
   }
 
   // Rotate images
@@ -249,14 +386,14 @@ async function startLocalSlideshow() {
       try {
         await displayImage(imagePath);
         
-        // Optionally update server with current image
+        // Update server with current image
         await fetch(`${SERVER_URL}/api/slideshow/current`, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
           },
           body: JSON.stringify({ imageId: nextImage.id }),
-        });
+        }).catch(() => {}); // Ignore errors
       } catch (err) {
         log(`Failed to display image in slideshow: ${err.message}`);
       }
