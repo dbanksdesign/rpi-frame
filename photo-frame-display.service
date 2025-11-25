@@ -8,6 +8,8 @@ Type=simple
 User=pi
 WorkingDirectory=/home/pi/rpi-frame
 Environment=DISPLAY=:0
+Environment=WAYLAND_DISPLAY=wayland-1
+Environment=XDG_RUNTIME_DIR=/run/user/1000
 Environment=SERVER_URL=http://localhost:3000
 Environment=POLL_INTERVAL=1000
 ExecStart=/usr/bin/node /home/pi/rpi-frame/display-client.js

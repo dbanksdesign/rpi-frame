@@ -6,11 +6,14 @@ After=network.target
 Type=simple
 User=pi
 WorkingDirectory=/home/pi/rpi-frame
+Environment=NODE_ENV=production
+Environment=PORT=3000
+Environment=WAYLAND_DISPLAY=wayland-1
+Environment=XDG_RUNTIME_DIR=/run/user/1000
+Environment=DISPLAY=:0
 ExecStart=/usr/bin/node /home/pi/rpi-frame/dist/server/index.js
 Restart=on-failure
 RestartSec=10
-Environment=NODE_ENV=production
-Environment=PORT=3000
 
 [Install]
 WantedBy=multi-user.target

@@ -81,11 +81,14 @@ After=network.target
 Type=simple
 User=$CURRENT_USER
 WorkingDirectory=$PROJECT_DIR
+Environment=NODE_ENV=production
+Environment=PORT=3000
+Environment=WAYLAND_DISPLAY=wayland-1
+Environment=XDG_RUNTIME_DIR=/run/user/$(id -u $CURRENT_USER)
+Environment=DISPLAY=:0
 ExecStart=$NODE_PATH $PROJECT_DIR/dist/server/index.js
 Restart=on-failure
 RestartSec=10
-Environment=NODE_ENV=production
-Environment=PORT=3000
 
 [Install]
 WantedBy=multi-user.target
@@ -102,6 +105,8 @@ Type=simple
 User=$CURRENT_USER
 WorkingDirectory=$PROJECT_DIR
 Environment=DISPLAY=:0
+Environment=WAYLAND_DISPLAY=wayland-1
+Environment=XDG_RUNTIME_DIR=/run/user/$(id -u $CURRENT_USER)
 Environment=SERVER_URL=http://localhost:3000
 Environment=POLL_INTERVAL=1000
 ExecStart=$NODE_PATH $PROJECT_DIR/display-client.js
