@@ -102,114 +102,10 @@ function displayImage(imagePath) {
   });
 }
 
-// Turn off the display using system commands
-async function turnOffDisplay() {
-  killCurrentDisplay();
-  
-  try {
-    // Try multiple methods to turn off display
-    // Method 1: Try wlr-randr (Wayland)
-    try {
-      const { execSync } = require('child_process');
-      execSync('wlr-randr --output HDMI-A-1 --off', { stdio: 'ignore' });
-      log('Display turned OFF using wlr-randr');
-      return;
-    } catch (err) {
-      // Try next method
-    }
-    
-    // Method 2: Try tvservice (older Pi OS)
-    try {
-      const { execSync } = require('child_process');
-      execSync('tvservice -o', { stdio: 'ignore' });
-      log('Display turned OFF using tvservice');
-      return;
-    } catch (err) {
-      // Try next method
-    }
-    
-    // Method 3: Try xset (X11)
-    try {
-      const { execSync } = require('child_process');
-      execSync('DISPLAY=:0 xset dpms force off', { stdio: 'ignore' });
-      log('Display turned OFF using xset');
-      return;
-    } catch (err) {
-      // Try next method
-    }
-    
-    // Method 4: Try vcgencmd (legacy)
-    try {
-      const { execSync } = require('child_process');
-      execSync('vcgencmd display_power 0', { stdio: 'ignore' });
-      log('Display turned OFF using vcgencmd');
-      return;
-    } catch (err) {
-      log('Could not turn off display - all methods failed');
-    }
-  } catch (error) {
-    log(`Error turning off display: ${error.message}`);
-  }
-}
-
-// Turn on the display using system commands
-async function turnOnDisplay() {
-  try {
-    // Try multiple methods to turn on display
-    // Method 1: Try wlr-randr (Wayland)
-    try {
-      const { execSync } = require('child_process');
-      execSync('wlr-randr --output HDMI-A-1 --on', { stdio: 'ignore' });
-      log('Display turned ON using wlr-randr');
-      return;
-    } catch (err) {
-      // Try next method
-    }
-    
-    // Method 2: Try tvservice (older Pi OS)
-    try {
-      const { execSync } = require('child_process');
-      execSync('tvservice -p', { stdio: 'ignore' });
-      // Refresh framebuffer
-      setTimeout(() => {
-        try {
-          execSync('fbset -depth 8 && fbset -depth 16', { stdio: 'ignore' });
-        } catch (e) {}
-      }, 1000);
-      log('Display turned ON using tvservice');
-      return;
-    } catch (err) {
-      // Try next method
-    }
-    
-    // Method 3: Try xset (X11)
-    try {
-      const { execSync } = require('child_process');
-      execSync('DISPLAY=:0 xset dpms force on', { stdio: 'ignore' });
-      log('Display turned ON using xset');
-      return;
-    } catch (err) {
-      // Try next method
-    }
-    
-    // Method 4: Try vcgencmd (legacy)
-    try {
-      const { execSync } = require('child_process');
-      execSync('vcgencmd display_power 1', { stdio: 'ignore' });
-      log('Display turned ON using vcgencmd');
-      return;
-    } catch (err) {
-      log('Could not turn on display - all methods failed');
-    }
-  } catch (error) {
-    log(`Error turning on display: ${error.message}`);
-  }
-}
-
 // Clear the display (show black screen)
 function clearDisplay() {
   killCurrentDisplay();
-  log('Display cleared');
+  log('Display cleared - feh process killed');
 }
 
 // Fetch slideshow state from server
@@ -257,21 +153,56 @@ async function fetchActiveImages() {
   }
 }
 
+// Trigger the server's display toggle endpoint
+async function triggerServerDisplayToggle(powerState) {
+  try {
+    const response = await fetch(`${SERVER_URL}/api/display/toggle`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ power: powerState }),
+    });
+    
+    if (response.ok) {
+      const result = await response.json();
+      log(`Server display toggle successful: ${result.method || 'unknown method'}`);
+      return true;
+    } else {
+      log(`Server display toggle failed: ${response.status}`);
+      return false;
+    }
+  } catch (error) {
+    log(`Error calling server display toggle: ${error.message}`);
+    return false;
+  }
+}
+
 // Main update loop
 async function updateDisplay() {
   try {
     // Check display state first
     const newDisplayState = await fetchDisplayState();
     if (newDisplayState !== displayState) {
+      const oldState = displayState;
       displayState = newDisplayState;
-      log(`Display state changed to: ${displayState}`);
+      log(`Display state changed from ${oldState} to ${displayState}`);
       
       if (displayState === 'off') {
+        // Clear the feh display
         clearDisplay();
-        await turnOffDisplay();
+        // Tell the server to turn off the physical display
+        log('Requesting server to turn off physical display...');
+        await triggerServerDisplayToggle(false);
         return;
       } else {
-        await turnOnDisplay();
+        // Display is turning on
+        log('Requesting server to turn on physical display...');
+        await triggerServerDisplayToggle(true);
+        // Wait a moment for display to power on
+        await new Promise(resolve => setTimeout(resolve, 2000));
+        // Resume slideshow
+        await startLocalSlideshow();
       }
     }
 
