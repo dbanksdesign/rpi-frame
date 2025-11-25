@@ -49,6 +49,40 @@ RUNTIME_DIR="/run/user/$USER_ID"
 
 echo "User ID: $USER_ID, Runtime dir: $RUNTIME_DIR"
 
+# Find the Wayland display socket
+WAYLAND_DISPLAY=""
+
+# Method 1: Check runtime directory for wayland sockets
+if [ -d "$RUNTIME_DIR" ]; then
+    # Look for wayland-* sockets
+    WAYLAND_SOCKET=$(ls -1 "$RUNTIME_DIR"/wayland-* 2>/dev/null | head -1 | xargs basename 2>/dev/null)
+    if [ -n "$WAYLAND_SOCKET" ]; then
+        WAYLAND_DISPLAY="$WAYLAND_SOCKET"
+    fi
+fi
+
+# Method 2: Get from the user's environment
+if [ -z "$WAYLAND_DISPLAY" ]; then
+    WAYLAND_DISPLAY=$(sudo -u "$GRAPHICAL_USER" printenv WAYLAND_DISPLAY 2>/dev/null)
+fi
+
+# Method 3: Try common defaults
+if [ -z "$WAYLAND_DISPLAY" ]; then
+    for socket in wayland-0 wayland-1; do
+        if [ -S "$RUNTIME_DIR/$socket" ]; then
+            WAYLAND_DISPLAY="$socket"
+            break
+        fi
+    done
+fi
+
+# Fallback to wayland-1
+if [ -z "$WAYLAND_DISPLAY" ]; then
+    WAYLAND_DISPLAY="wayland-1"
+fi
+
+echo "Using WAYLAND_DISPLAY: $WAYLAND_DISPLAY"
+
 # Action: "on" or "off"
 ACTION="$1"
 
@@ -58,17 +92,35 @@ if [ "$ACTION" != "on" ] && [ "$ACTION" != "off" ]; then
 fi
 
 # Run wlr-randr as the graphical user with proper environment
+echo "Running: sudo -u $GRAPHICAL_USER WAYLAND_DISPLAY=$WAYLAND_DISPLAY XDG_RUNTIME_DIR=$RUNTIME_DIR wlr-randr --output HDMI-A-1 --$ACTION"
+
 if [ "$ACTION" = "off" ]; then
     sudo -u "$GRAPHICAL_USER" \
-        WAYLAND_DISPLAY=wayland-1 \
+        WAYLAND_DISPLAY="$WAYLAND_DISPLAY" \
         XDG_RUNTIME_DIR="$RUNTIME_DIR" \
-        wlr-randr --output HDMI-A-1 --off
+        wlr-randr --output HDMI-A-1 --off 2>&1
+    EXIT_CODE=$?
 else
     sudo -u "$GRAPHICAL_USER" \
-        WAYLAND_DISPLAY=wayland-1 \
+        WAYLAND_DISPLAY="$WAYLAND_DISPLAY" \
         XDG_RUNTIME_DIR="$RUNTIME_DIR" \
-        wlr-randr --output HDMI-A-1 --on
+        wlr-randr --output HDMI-A-1 --on 2>&1
+    EXIT_CODE=$?
 fi
 
-exit $?
+if [ $EXIT_CODE -ne 0 ]; then
+    echo "ERROR: wlr-randr failed with exit code $EXIT_CODE"
+    echo ""
+    echo "Debug: Let's check what's available..."
+    echo "Runtime dir contents:"
+    ls -la "$RUNTIME_DIR" 2>&1 | head -20
+    echo ""
+    echo "Wayland sockets:"
+    ls -la "$RUNTIME_DIR"/wayland-* 2>&1
+    echo ""
+    echo "Try running this manually as your user:"
+    echo "  wlr-randr --output HDMI-A-1 --off"
+fi
+
+exit $EXIT_CODE
 
