@@ -1,22 +1,24 @@
 # Raspberry Pi Digital Photo Frame
 
-A modern web application that turns your Raspberry Pi into a beautiful digital photo frame. Manage your photos from any device on your local network!
+A modern digital photo frame application for Raspberry Pi. Display images natively without a browser, while managing your photos from any device on your local network!
 
 ## Features
 
-- 📸 **Slideshow View**: Automatic photo slideshow perfect for wall displays
+- 📸 **Native Display**: Images displayed directly on the Pi using `feh` (no browser needed!)
 - 🖼️ **Photo Management**: Upload, show/hide, and delete photos from any device
-- 🌐 **Network Accessible**: Control from your laptop, phone, or tablet
+- 🌐 **Network Accessible**: Control from your laptop, phone, or tablet via web interface
 - 💾 **Local Storage**: All photos stored directly on your Raspberry Pi
-- 📱 **Responsive Design**: Works great on desktop and mobile devices
+- 📱 **Responsive Web UI**: Manage photos from desktop or mobile devices
 - ⚡ **Modern Tech Stack**: Built with TypeScript, React, and Express
+- 🔌 **Display Control**: Turn display on/off remotely from the web interface
+- ⏱️ **Customizable Timing**: Adjust slideshow duration from the web interface
 
 ## Prerequisites
 
-- Raspberry Pi (any model with network connectivity)
+- Raspberry Pi (any model with network connectivity and display output)
 - Node.js 18+ and npm installed
-- Display connected to your Raspberry Pi
-- Chromium browser (for kiosk mode display)
+- Display connected to your Raspberry Pi (HDMI)
+- `feh` image viewer (installed automatically by setup script)
 
 ### Installing Prerequisites on Raspberry Pi
 
@@ -26,18 +28,38 @@ curl -fsSL https://deb.nodesource.com/setup_18.x | sudo -E bash -
 sudo apt-get install -y nodejs
 ```
 
-If you need to install Chromium:
-```bash
-sudo apt update
-sudo apt install chromium-browser -y
-```
-
-If you want to hide the cursor (recommended for photo frame displays):
-```bash
-sudo apt install unclutter -y
-```
-
 ## Installation
+
+### Automated Installation (Recommended)
+
+1. **Clone or download this project to your Raspberry Pi:**
+```bash
+cd ~
+git clone <your-repo-url> rpi-frame
+cd rpi-frame
+```
+
+2. **Install dependencies:**
+```bash
+npm install
+```
+
+3. **Run the installation script:**
+```bash
+./install-display.sh
+```
+
+This script will:
+- Install `feh` (image viewer) if not already installed
+- Build the application
+- Create and configure systemd services
+- Start the photo frame automatically
+
+That's it! The photo frame is now running and will start automatically on boot.
+
+### Manual Installation
+
+If you prefer to set things up manually:
 
 1. **Clone or download this project to your Raspberry Pi**
 
@@ -46,40 +68,91 @@ sudo apt install unclutter -y
 npm install
 ```
 
-3. **Build the application:**
+3. **Install feh:**
+```bash
+sudo apt update
+sudo apt install feh -y
+```
+
+4. **Build the application:**
 ```bash
 npm run build
 ```
 
+5. **Copy service files:**
+```bash
+sudo cp photo-frame-server.service /etc/systemd/system/
+sudo cp photo-frame-display.service /etc/systemd/system/
+# Edit the service files to update paths and username
+sudo nano /etc/systemd/system/photo-frame-server.service
+sudo nano /etc/systemd/system/photo-frame-display.service
+```
+
+6. **Enable and start services:**
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable photo-frame-server.service
+sudo systemctl enable photo-frame-display.service
+sudo systemctl start photo-frame-server.service
+sudo systemctl start photo-frame-display.service
+```
+
 ## Running the Application
+
+### After Installation
+
+Once installed, the photo frame runs automatically! Two services are running:
+
+1. **Server Service** (`photo-frame-server.service`): The web server for managing photos
+2. **Display Service** (`photo-frame-display.service`): The native image display
+
+**Service Management Commands:**
+```bash
+# View logs
+sudo journalctl -u photo-frame-server.service -f
+sudo journalctl -u photo-frame-display.service -f
+
+# Restart services
+sudo systemctl restart photo-frame-server.service
+sudo systemctl restart photo-frame-display.service
+
+# Stop services
+sudo systemctl stop photo-frame-server.service
+sudo systemctl stop photo-frame-display.service
+
+# Check status
+sudo systemctl status photo-frame-server.service
+sudo systemctl status photo-frame-display.service
+```
 
 ### Development Mode (for testing)
 
-Run both the frontend and backend in development mode:
+If you want to test changes without the systemd services:
 
+1. **Stop the services:**
+```bash
+sudo systemctl stop photo-frame-server.service
+sudo systemctl stop photo-frame-display.service
+```
+
+2. **Run the server in development:**
 ```bash
 npm run dev
+```
+
+3. **In another terminal, run the display client:**
+```bash
+node display-client.js
 ```
 
 This will start:
 - Backend API server on `http://localhost:3000`
 - Frontend development server on `http://localhost:5173`
+- Native display client for showing images
 
-### Production Mode (recommended for Raspberry Pi)
+## Using the Application
 
-1. **Build the application** (if you haven't already):
-```bash
-npm run build
-```
-
-2. **Start the server:**
-```bash
-npm start
-```
-
-The application will be available at `http://0.0.0.0:3000`
-
-3. **Access from other devices:**
+### Accessing the Web Interface
 
 Find your Raspberry Pi's IP address:
 ```bash
@@ -93,37 +166,11 @@ http://YOUR_PI_IP_ADDRESS:3000
 
 For example: `http://192.168.1.100:3000`
 
-## Using the Application
+### How It Works
 
-### Direct URLs
-
-The application has two separate views accessible via direct URLs:
-
-- **Slideshow View**: `http://YOUR_PI_IP:3000/slideshow`
-  - Full-screen photo slideshow with no navigation bar
-  - Perfect for the wall display
-  - Auto-updates when photos are added/removed
-  - Press ESC to return to manage view (if needed)
-
-- **Manage View**: `http://YOUR_PI_IP:3000/manage`
-  - Upload, show/hide, and delete photos
-  - Access from your phone, laptop, or any device
-  - Shows notifications when changes are made
-
-- **Root URL**: `http://YOUR_PI_IP:3000/`
-  - Redirects to `/manage` by default
-
-### For the Wall Display
-
-**Option 1: Direct slideshow URL (Recommended)**
-- Navigate directly to `http://localhost:3000/slideshow`
-- No navigation bar, pure full-screen slideshow
-- Perfect for kiosk mode
-
-**Option 2: Manual navigation**
-1. Go to `http://localhost:3000`
-2. Click **"Slideshow"** in the navigation
-3. Press F11 to enter fullscreen mode
+1. **On the Raspberry Pi**: Images are displayed directly on the connected monitor using `feh` (no browser needed!)
+2. **From Other Devices**: Access the web interface to upload and manage photos
+3. **Real-time Updates**: The Pi display automatically updates when you add/remove/change photos
 
 ### Managing Photos
 
@@ -131,243 +178,76 @@ The application has two separate views accessible via direct URLs:
 2. Upload new photos using the **"+ Upload Photos"** button
 3. Show/hide photos from the slideshow using the eye icon
 4. Delete unwanted photos with the delete button
-5. The slideshow on the Pi will auto-update within 5 seconds!
+5. The display on the Pi will auto-update within 1 second!
 
-## Auto-Start on Boot (Optional)
+### Display Controls
 
-To make the application start automatically when your Raspberry Pi boots:
+From the web interface, you can:
+- **Turn Display On/Off**: Use the display toggle to remotely turn the display on or off
+- **Adjust Slideshow Duration**: Change how long each image displays
+- **Organize Collections**: Group photos into collections
+- **Select Active Collection**: Choose which collection to display
 
-1. **First, find the full path to Node.js:**
+## Auto-Start on Boot
+
+The installation script automatically configures the photo frame to start on boot. If you did a manual installation, see the service files section above.
+
+To disable auto-start:
 ```bash
-which node
+sudo systemctl disable photo-frame-server.service
+sudo systemctl disable photo-frame-display.service
 ```
-This will output something like `/usr/bin/node` or `/home/YOUR_USERNAME/.nvm/versions/node/v18.x.x/bin/node`
 
-2. **Create a systemd service:**
+To re-enable:
 ```bash
-sudo nano /etc/systemd/system/photo-frame.service
+sudo systemctl enable photo-frame-server.service
+sudo systemctl enable photo-frame-display.service
 ```
-
-3. **Add the following content** (replace `YOUR_USERNAME`, `NODE_PATH`, and project path as needed):
-```ini
-[Unit]
-Description=Digital Photo Frame
-After=network.target
-
-[Service]
-Type=simple
-User=YOUR_USERNAME
-WorkingDirectory=/home/YOUR_USERNAME/rpi-frame
-ExecStart=/usr/bin/node /home/YOUR_USERNAME/rpi-frame/dist/server/index.js
-Restart=on-failure
-RestartSec=10
-Environment=NODE_ENV=production
-Environment=PORT=3000
-
-[Install]
-WantedBy=multi-user.target
-```
-
-**Important Notes:**
-- Replace `YOUR_USERNAME` with your actual username (run `whoami` to find it)
-- Replace `/usr/bin/node` with the path from step 1
-- Replace `/home/YOUR_USERNAME/rpi-frame` with your actual project path
-- Make sure you've run `npm run build` before starting the service!
-
-4. **Reload systemd, enable and start the service:**
-```bash
-sudo systemctl daemon-reload
-sudo systemctl enable photo-frame.service
-sudo systemctl start photo-frame.service
-```
-
-5. **Check status:**
-```bash
-sudo systemctl status photo-frame.service
-```
-
-If you see errors, check the logs:
-```bash
-sudo journalctl -u photo-frame.service -n 50 -f
-```
-
-6. **To stop or restart the service:**
-```bash
-sudo systemctl stop photo-frame.service
-sudo systemctl restart photo-frame.service
-```
-
-## Auto-Start Browser in Kiosk Mode (Optional)
-
-To automatically open the slideshow in fullscreen when the Pi boots:
-
-### Prerequisites
-
-**Install unclutter to hide the cursor:**
-```bash
-sudo apt install unclutter -y
-```
-
-This will automatically hide the mouse cursor, which is essential for a clean photo frame display.
-
-### Method 1: Using autostart (Raspberry Pi Desktop)
-
-1. **First, check which desktop environment you're using:**
-```bash
-echo $DESKTOP_SESSION
-```
-
-2. **Create/edit the autostart file:**
-
-For LXDE (most Raspberry Pi OS):
-```bash
-mkdir -p ~/.config/lxsession/LXDE-pi
-nano ~/.config/lxsession/LXDE-pi/autostart
-```
-
-For other desktop environments, the path might be different:
-- LXDE: `~/.config/lxsession/LXDE/autostart`
-- Wayfire: `~/.config/wayfire.ini`
-
-3. **Add these lines to the autostart file:**
-```
-@xset s off
-@xset -dpms
-@xset s noblank
-@unclutter -idle 0.1 -root
-@sleep 10
-@chromium-browser --kiosk --start-fullscreen --app=http://localhost:3000/slideshow --noerrdialogs --disable-infobars --no-first-run --check-for-update-interval=31536000
-```
-
-**What these do:**
-- `xset` commands: Disable screen blanking and power saving
-- `unclutter`: Hide the mouse cursor after 0.1 seconds of inactivity
-- `sleep 10`: Wait 10 seconds for the server to fully start
-- `--kiosk`: Full screen mode without browser UI
-- `--noerrdialogs`: Suppress error dialogs
-- `--disable-infobars`: Hide info bars
-- `--no-first-run`: Skip first-run prompts
-
-4. **Verify the browser command works:**
-```bash
-chromium-browser --version
-```
-
-If that doesn't work, try:
-```bash
-chromium --version
-```
-
-Use whichever one works in your autostart file.
-
-5. **Reboot to test:**
-```bash
-sudo reboot
-```
-
-### Method 2: Using a startup script (Alternative)
-
-If Method 1 doesn't work, try this approach:
-
-1. **Create a startup script:**
-```bash
-nano ~/start-photo-frame.sh
-```
-
-2. **Add this content:**
-```bash
-#!/bin/bash
-
-# Wait for the desktop to load
-sleep 15
-
-# Disable screen blanking
-xset s off
-xset -dpms
-xset s noblank
-
-# Hide cursor
-unclutter -idle 0.1 -root &
-
-# Wait for server to be ready
-while ! curl -s http://localhost:3000 > /dev/null; do
-    echo "Waiting for server..."
-    sleep 2
-done
-
-# Launch browser in kiosk mode directly to slideshow
-DISPLAY=:0 chromium-browser --kiosk --start-fullscreen \
-  --app=http://localhost:3000/slideshow \
-  --noerrdialogs --disable-infobars \
-  --no-first-run --disable-translate \
-  --check-for-update-interval=31536000 &
-```
-
-3. **Make it executable:**
-```bash
-chmod +x ~/start-photo-frame.sh
-```
-
-4. **Add to autostart:**
-```bash
-mkdir -p ~/.config/lxsession/LXDE-pi
-nano ~/.config/lxsession/LXDE-pi/autostart
-```
-
-Add this line:
-```
-@/home/YOUR_USERNAME/start-photo-frame.sh
-```
-(Replace `YOUR_USERNAME` with your actual username)
-
-5. **Reboot to test:**
-```bash
-sudo reboot
-```
-
-### Troubleshooting:
-
-**Browser doesn't open:**
-- Check if the autostart file is in the right location
-- Try running the browser command manually to test it
-- Check if Chromium is installed: `sudo apt install chromium-browser`
-- Increase the sleep time in case the server needs longer to start
-
-**Browser opens but shows error:**
-- Make sure the service started: `sudo systemctl status photo-frame.service`
-- Check if the server is accessible: `curl http://localhost:3000`
-- Look at browser console with F12
-
-**Screen blanks after a while:**
-- Check if your Pi has additional power-saving settings
-- Add to `/etc/lightdm/lightdm.conf` under `[Seat:*]`:
-  ```
-  xserver-command=X -s 0 -dpms
-  ```
-
-**To manually exit kiosk mode on the Pi:**
-- Press `Alt+F4` to close the browser
-- Press `Ctrl+W` to close the current tab
-- Press `F11` to exit fullscreen
 
 ## Project Structure
 
 ```
 rpi-frame/
-├── server/              # Backend Express API
-│   ├── index.ts         # Server entry point
-│   ├── routes/          # API routes
-│   └── utils/           # Utilities (image store, filesystem)
-├── src/                 # Frontend React application
-│   ├── components/      # React components
-│   │   ├── Slideshow    # Slideshow view
-│   │   └── Admin        # Photo management
-│   ├── App.tsx          # Main app component
-│   └── main.tsx         # Entry point
-├── uploads/             # Photo storage (created automatically)
-├── data/                # Image metadata (created automatically)
-└── dist/                # Compiled production files
+├── server/                    # Backend Express API
+│   ├── index.ts              # Server entry point
+│   ├── routes/               # API routes
+│   └── utils/                # Utilities (image store, filesystem)
+├── src/                      # Frontend React application
+│   ├── components/           # React components
+│   │   ├── Slideshow        # Slideshow view (for browser)
+│   │   └── Admin            # Photo management
+│   ├── App.tsx              # Main app component
+│   └── main.tsx             # Entry point
+├── display-client.js        # Native display client (runs on Pi)
+├── photo-frame-server.service    # Systemd service for server
+├── photo-frame-display.service   # Systemd service for display
+├── install-display.sh       # Automated installation script
+├── uploads/                 # Photo storage (created automatically)
+├── data/                    # Image metadata (created automatically)
+└── dist/                    # Compiled production files
 ```
+
+## Architecture
+
+This project has been redesigned to display images natively on the Raspberry Pi without requiring a browser:
+
+**On the Raspberry Pi:**
+1. **Server Service**: Runs the Express API server for photo management
+2. **Display Client**: Runs `display-client.js` which uses `feh` to display images directly to the framebuffer
+3. **Auto-sync**: The display client polls the server every second for updates
+
+**From Other Devices:**
+1. **Web Interface**: Access the full web UI from any device on the network
+2. **Remote Control**: Upload photos, adjust settings, control display power
+3. **Real-time Updates**: Changes sync to the Pi display within 1 second
+
+**Benefits of Native Display:**
+- ✅ No browser startup issues
+- ✅ Lower memory usage
+- ✅ Faster startup time
+- ✅ More reliable display power control
+- ✅ Simpler boot configuration
+- ✅ Can still use the web interface from other devices
 
 ## Troubleshooting
 
@@ -381,16 +261,56 @@ rpi-frame/
 - Ensure the `uploads` directory has write permissions
 
 **Application not starting:**
-- Check if Node.js is installed: `node --version`
-- Install if needed: `curl -fsSL https://deb.nodesource.com/setup_18.x | sudo -E bash - && sudo apt-get install -y nodejs`
+- Check service status: `sudo systemctl status photo-frame-server.service`
+- Check logs: `sudo journalctl -u photo-frame-server.service -n 50`
+
+**Display not showing images:**
+- Check display service: `sudo systemctl status photo-frame-display.service`
+- Check logs: `sudo journalctl -u photo-frame-display.service -n 50`
+- Make sure `feh` is installed: `sudo apt install feh`
+- Verify display is connected: `DISPLAY=:0 xset q`
+
+**Display turns back on automatically:**
+- Some systems have power management that re-enables the display
+- The display service includes automatic enforcement to keep it off
+- Check if display is really off: `wlr-randr` or `tvservice -s`
+
+**Images not updating on display:**
+- Check that the display service is running
+- Restart display service: `sudo systemctl restart photo-frame-display.service`
+- Check for errors in logs
 
 ## Customization
 
 ### Change slideshow timing:
 
-Edit `src/components/Slideshow.tsx` and modify:
-```typescript
-const TRANSITION_DURATION = 5000 // Change to desired milliseconds
+Use the web interface to adjust the slideshow duration, or edit `data/slideshow-state.json`:
+```json
+{
+  "currentImageId": "...",
+  "duration": 10000,
+  "activeCollectionId": null
+}
+```
+
+Duration is in milliseconds (10000 = 10 seconds).
+
+### Change the polling interval:
+
+Edit the display service file:
+```bash
+sudo nano /etc/systemd/system/photo-frame-display.service
+```
+
+Change the `POLL_INTERVAL` environment variable (in milliseconds):
+```
+Environment=POLL_INTERVAL=1000
+```
+
+Then reload and restart:
+```bash
+sudo systemctl daemon-reload
+sudo systemctl restart photo-frame-display.service
 ```
 
 ### Change upload file size limit:
@@ -398,6 +318,12 @@ const TRANSITION_DURATION = 5000 // Change to desired milliseconds
 Edit `server/routes/api.ts` and modify:
 ```typescript
 limits: { fileSize: 10 * 1024 * 1024 } // Change to desired bytes
+```
+
+Then rebuild and restart:
+```bash
+npm run build
+sudo systemctl restart photo-frame-server.service
 ```
 
 ## License

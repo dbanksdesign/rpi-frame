@@ -1,0 +1,19 @@
+[Unit]
+Description=Digital Photo Frame Native Display Client
+After=network.target photo-frame-server.service
+Wants=photo-frame-server.service
+
+[Service]
+Type=simple
+User=pi
+WorkingDirectory=/home/pi/rpi-frame
+Environment=DISPLAY=:0
+Environment=SERVER_URL=http://localhost:3000
+Environment=POLL_INTERVAL=1000
+ExecStart=/usr/bin/node /home/pi/rpi-frame/display-client.js
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=graphical.target
+

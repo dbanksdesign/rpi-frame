@@ -7,11 +7,15 @@
     "dev": "concurrently \"npm run dev:server\" \"npm run dev:client\"",
     "dev:server": "nodemon --watch server --ext ts --exec tsx server/index.ts",
     "dev:client": "vite",
+    "dev:display": "node display-client.js",
     "build": "npm run build:server && npm run build:client",
     "build:server": "tsc -p tsconfig.server.json",
     "build:client": "vite build",
     "start": "NODE_ENV=production node dist/server/index.js",
-    "preview": "vite preview"
+    "start:display": "node display-client.js",
+    "preview": "vite preview",
+    "install:services": "./install-display.sh",
+    "uninstall:services": "./uninstall.sh"
   },
   "keywords": [
     "raspberry-pi",
