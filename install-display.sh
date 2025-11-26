@@ -109,7 +109,7 @@ Environment=WAYLAND_DISPLAY=wayland-1
 Environment=XDG_RUNTIME_DIR=/run/user/$(id -u $CURRENT_USER)
 Environment=SERVER_URL=http://localhost:3000
 Environment=POLL_INTERVAL=1000
-ExecStart=$NODE_PATH $PROJECT_DIR/display-client.js
+ExecStart=$PROJECT_DIR/start.sh
 Restart=always
 RestartSec=5
 

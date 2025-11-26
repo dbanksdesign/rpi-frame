@@ -4,10 +4,10 @@
 sleep 5
 
 # Disable screen blanking
-xset s off          # Disable screensaver
-xset +dpms          # ENABLE DPMS (instead of -dpms)
-xset s noblank      # Prevent automatic blanking
-xset dpms 0 0 0     # Set all DPMS timeouts to 0 (never auto-trigger)
+DISPLAY=:0 xset s off          # Disable screensaver
+DISPLAY=:0 xset +dpms          # ENABLE DPMS (instead of -dpms)
+DISPLAY=:0 xset s noblank      # Prevent automatic blanking
+DISPLAY=:0 xset dpms 0 0 0     # Set all DPMS timeouts to 0 (never auto-trigger)
 
 # Hide cursor after 0.1 seconds of inactivity
 DISPLAY=:0 unclutter -idle 0.1 -root &
