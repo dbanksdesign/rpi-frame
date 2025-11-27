@@ -22,10 +22,9 @@ import {
   Modal,
   TextInput,
   Textarea,
-  MultiSelect,
   Chip,
 } from '@mantine/core'
-import { IconUpload, IconEye, IconEyeOff, IconTrash, IconPhoto, IconPlayerPlay, IconClock, IconPlus, IconFolder, IconFolderPlus, IconEdit } from '@tabler/icons-react'
+import { IconUpload, IconEye, IconEyeOff, IconTrash, IconPhoto, IconPlayerPlay, IconClock, IconFolder, IconFolderPlus } from '@tabler/icons-react'
 import './Admin.css'
 
 interface Image {
@@ -60,7 +59,6 @@ function Admin() {
   const [uploading, setUploading] = useState(false)
   const [notification, setNotification] = useState<string | null>(null)
   const [files, setFiles] = useState<File[]>([])
-  const [currentImageId, setCurrentImageId] = useState<string | null>(null)
   const [durationValue, setDurationValue] = useState(2)
   const [durationUnit, setDurationUnit] = useState<TimeUnit>('minutes')
   const [durationSaving, setDurationSaving] = useState(false)
@@ -78,11 +76,7 @@ function Admin() {
   useEffect(() => {
     fetchImages()
     fetchCollections()
-    fetchSlideshowState(true) // Load duration and collection on initial mount
-    
-    // Poll for current image updates only (not duration)
-    const interval = setInterval(() => fetchSlideshowState(false), 10000)
-    return () => clearInterval(interval)
+    fetchSlideshowState() // Load duration and collection on initial mount
   }, [])
 
   useEffect(() => {
@@ -147,21 +141,16 @@ function Admin() {
     }
   }
 
-  const fetchSlideshowState = async (includeDuration = false) => {
+  const fetchSlideshowState = async () => {
     try {
       const response = await fetch('/api/slideshow/state')
       if (!response.ok) throw new Error('Failed to fetch slideshow state')
       const data: SlideshowState = await response.json()
-      setCurrentImageId(data.currentImageId)
       setActiveCollectionId(data.activeCollectionId)
       
-      // Only update duration on initial load or after successful save
-      // to prevent overwriting user's edits while they're typing
-      if (includeDuration) {
-        const { value, unit } = convertMsToValueAndUnit(data.duration)
-        setDurationValue(value)
-        setDurationUnit(unit)
-      }
+      const { value, unit } = convertMsToValueAndUnit(data.duration)
+      setDurationValue(value)
+      setDurationUnit(unit)
     } catch (err) {
       console.error('Error fetching slideshow state:', err)
     }
@@ -178,7 +167,6 @@ function Admin() {
       })
 
       if (!response.ok) throw new Error('Failed to set current image')
-      setCurrentImageId(imageId)
       showNotification('Image will display now on the frame!')
     } catch (err) {
       console.error('Error setting current image:', err)
@@ -211,9 +199,6 @@ function Admin() {
 
       if (!response.ok) throw new Error('Failed to update duration')
       showNotification('Duration updated! Changes will apply to the next photo.')
-      
-      // Refresh duration from server after successful save
-      await fetchSlideshowState(true)
     } catch (err) {
       console.error('Error updating duration:', err)
       alert('Failed to update duration')
@@ -377,8 +362,6 @@ function Admin() {
     )
   }
 
-  const currentImage = images.find(img => img.id === currentImageId)
-  
   // Filter images by selected collection
   const filteredImages = filterCollectionId
     ? images.filter(img => img.collectionIds.includes(filterCollectionId))
@@ -417,27 +400,6 @@ function Admin() {
         <Title order={3} mb="md">Slideshow Settings</Title>
         
         <Stack gap="md">
-          <Box>
-            <Text size="sm" fw={500} mb="xs">Currently Displaying:</Text>
-            {currentImage ? (
-              <Group gap="md">
-                <MantineImage
-                  src={currentImage.path}
-                  alt={currentImage.originalName}
-                  h={80}
-                  w={120}
-                  fit="cover"
-                  radius="sm"
-                />
-                <Text size="sm">{currentImage.originalName}</Text>
-              </Group>
-            ) : (
-              <Text size="sm" c="dimmed">No image currently displayed</Text>
-            )}
-          </Box>
-
-          <Divider />
-
           <Box>
             <Text size="sm" fw={500} mb="xs">Active Collection</Text>
             <Text size="xs" c="dimmed" mb="sm">Choose which collection to display in the slideshow</Text>
@@ -632,18 +594,6 @@ function Admin() {
                     Hidden
                   </Badge>
                 )}
-                {image.id === currentImageId && (
-                  <Badge
-                    color="green"
-                    size="lg"
-                    pos="absolute"
-                    top={10}
-                    left={10}
-                    variant="filled"
-                  >
-                    Now Playing
-                  </Badge>
-                )}
               </Card.Section>
 
               <Stack gap="xs" mt="md">
@@ -705,9 +655,8 @@ function Admin() {
                     onClick={() => showImageNow(image.id)}
                     size="xs"
                     fullWidth
-                    disabled={image.id === currentImageId}
                   >
-                    {image.id === currentImageId ? 'Currently Showing' : 'Show Now'}
+                    Show Now
                   </Button>
                 )}
               </Stack>
