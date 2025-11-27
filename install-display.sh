@@ -1,13 +1,13 @@
 #!/bin/bash
 
 # Installation script for Raspberry Pi Digital Photo Frame
-# This configures the Pi to display images natively without a browser
+# This configures the Pi to display images using Chromium browser
 
 set -e  # Exit on error
 
 echo "=========================================="
 echo "Raspberry Pi Digital Photo Frame Setup"
-echo "Native Display (No Browser Required)"
+echo "Browser-Based Display"
 echo "=========================================="
 echo ""
 
@@ -28,18 +28,8 @@ echo "Current user: $CURRENT_USER"
 echo "Project directory: $PROJECT_DIR"
 echo ""
 
-# Step 1: Check if feh is installed
+# Step 1: Check if Node.js is installed
 echo "Step 1: Checking for required packages..."
-if ! command -v feh &> /dev/null; then
-    echo -e "${YELLOW}feh is not installed. Installing...${NC}"
-    sudo apt update
-    sudo apt install -y feh
-    echo -e "${GREEN}✓ feh installed${NC}"
-else
-    echo -e "${GREEN}✓ feh is already installed${NC}"
-fi
-
-# Check if Node.js is installed
 if ! command -v node &> /dev/null; then
     echo -e "${RED}ERROR: Node.js is not installed!${NC}"
     echo "Please install Node.js first:"
@@ -56,23 +46,18 @@ NODE_PATH=$(which node)
 echo "Node path: $NODE_PATH"
 echo ""
 
-# Step 2: Build the application if needed
+# Step 2: Build the application
 echo "Step 2: Building application..."
-if [ ! -d "$PROJECT_DIR/dist" ]; then
-    echo "Building application for the first time..."
-    cd "$PROJECT_DIR"
-    npm run build
-    echo -e "${GREEN}✓ Application built${NC}"
-else
-    echo -e "${GREEN}✓ Application already built${NC}"
-fi
+cd "$PROJECT_DIR"
+npm run build
+echo -e "${GREEN}✓ Application built${NC}"
 echo ""
 
 # Step 3: Create systemd service files with actual paths
 echo "Step 3: Creating systemd service files..."
 
-# Update service files with actual user and paths
-cat > /tmp/photo-frame-server.service << EOF
+# Create server service file
+sudo tee /etc/systemd/system/photo-frame-server.service > /dev/null << EOF
 [Unit]
 Description=Digital Photo Frame Server
 After=network.target
@@ -83,20 +68,22 @@ User=$CURRENT_USER
 WorkingDirectory=$PROJECT_DIR
 Environment=NODE_ENV=production
 Environment=PORT=3000
-Environment=WAYLAND_DISPLAY=wayland-1
-Environment=XDG_RUNTIME_DIR=/run/user/$(id -u $CURRENT_USER)
-Environment=DISPLAY=:0
 ExecStart=$NODE_PATH $PROJECT_DIR/dist/server/index.js
 Restart=on-failure
 RestartSec=10
+StartLimitBurst=5
+StartLimitIntervalSec=300
+StandardOutput=journal
+StandardError=journal
 
 [Install]
 WantedBy=multi-user.target
 EOF
 
-cat > /tmp/photo-frame-display.service << EOF
+# Create display client service file
+sudo tee /etc/systemd/system/photo-frame-display.service > /dev/null << EOF
 [Unit]
-Description=Digital Photo Frame Native Display Client
+Description=Digital Photo Frame Display Client
 After=network.target photo-frame-server.service graphical.target
 Wants=photo-frame-server.service
 
@@ -107,21 +94,17 @@ WorkingDirectory=$PROJECT_DIR
 Environment=DISPLAY=:0
 Environment=WAYLAND_DISPLAY=wayland-1
 Environment=XDG_RUNTIME_DIR=/run/user/$(id -u $CURRENT_USER)
-Environment=SERVER_URL=http://localhost:3000
-Environment=POLL_INTERVAL=1000
 ExecStart=$PROJECT_DIR/start.sh
+Restart=always
+RestartSec=5
+StartLimitBurst=5
+StartLimitIntervalSec=300
+StandardOutput=journal
+StandardError=journal
 
 [Install]
 WantedBy=graphical.target
 EOF
-
-# Copy service files to systemd directory
-sudo cp /tmp/photo-frame-server.service /etc/systemd/system/
-sudo cp /tmp/photo-frame-display.service /etc/systemd/system/
-
-# Clean up temp files
-rm /tmp/photo-frame-server.service
-rm /tmp/photo-frame-display.service
 
 echo -e "${GREEN}✓ Service files created${NC}"
 echo ""
@@ -164,7 +147,7 @@ echo "📱 Access the web interface from another device:"
 IP_ADDRESS=$(hostname -I | awk '{print $1}')
 echo "   http://$IP_ADDRESS:3000"
 echo ""
-echo "🖼️  The display is now showing images directly (no browser needed)"
+echo "🖼️  The display is now showing images using Chromium browser"
 echo ""
 echo "📋 Useful commands:"
 echo "   View server logs:  sudo journalctl -u photo-frame-server.service -f"
