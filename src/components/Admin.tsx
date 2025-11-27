@@ -81,7 +81,7 @@ function Admin() {
     fetchSlideshowState(true) // Load duration and collection on initial mount
     
     // Poll for current image updates only (not duration)
-    const interval = setInterval(() => fetchSlideshowState(false), 2000)
+    const interval = setInterval(() => fetchSlideshowState(false), 10000)
     return () => clearInterval(interval)
   }, [])
 

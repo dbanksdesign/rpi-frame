@@ -110,8 +110,6 @@ Environment=XDG_RUNTIME_DIR=/run/user/$(id -u $CURRENT_USER)
 Environment=SERVER_URL=http://localhost:3000
 Environment=POLL_INTERVAL=1000
 ExecStart=$PROJECT_DIR/start.sh
-Restart=always
-RestartSec=5
 
 [Install]
 WantedBy=graphical.target
