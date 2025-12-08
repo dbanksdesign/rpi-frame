@@ -9,49 +9,35 @@ interface SlideshowProps {
 function Slideshow({ onShowNav }: SlideshowProps) {
   const { activeImages, slideshowState, connected, setCurrentImage } = useWebSocket()
   const [currentIndex, setCurrentIndex] = useState(0)
-  const [currentImageId, setCurrentImageId] = useState<string | null>(null)
-  const lastSyncedImageIdRef = useRef<string | null>(null)
+  
+  // Track the last image ID we synced from server to avoid re-sending
+  const lastServerImageIdRef = useRef<string | null>(null)
 
   const { duration, currentImageId: serverCurrentImageId } = slideshowState
 
   // Sync with server's current image when it changes (e.g., from admin "Show Now")
   useEffect(() => {
-    if (serverCurrentImageId && serverCurrentImageId !== lastSyncedImageIdRef.current) {
+    if (serverCurrentImageId && serverCurrentImageId !== lastServerImageIdRef.current) {
+      lastServerImageIdRef.current = serverCurrentImageId
       const idx = activeImages.findIndex(img => img.id === serverCurrentImageId)
-      if (idx !== -1) {
+      if (idx !== -1 && idx !== currentIndex) {
         setCurrentIndex(idx)
-        setCurrentImageId(serverCurrentImageId)
-        lastSyncedImageIdRef.current = serverCurrentImageId
       }
     }
-  }, [serverCurrentImageId, activeImages])
+  }, [serverCurrentImageId, activeImages, currentIndex])
 
-  // Handle image list changes
+  // Handle image list changes - adjust index if current image was removed
   useEffect(() => {
     if (activeImages.length === 0) {
-      setCurrentImageId(null)
       setCurrentIndex(0)
       return
     }
 
-    // If current image was removed, adjust index
-    if (currentImageId) {
-      const idx = activeImages.findIndex(img => img.id === currentImageId)
-      if (idx === -1) {
-        // Current image no longer in list, pick safe index
-        const safeIndex = Math.min(currentIndex, activeImages.length - 1)
-        setCurrentIndex(safeIndex)
-        setCurrentImageId(activeImages[safeIndex].id)
-      } else if (idx !== currentIndex) {
-        // Image moved position
-        setCurrentIndex(idx)
-      }
-    } else {
-      // No current image, set to first
-      setCurrentIndex(0)
-      setCurrentImageId(activeImages[0].id)
+    // Check if current index is out of bounds
+    if (currentIndex >= activeImages.length) {
+      setCurrentIndex(activeImages.length - 1)
     }
-  }, [activeImages, currentImageId, currentIndex])
+  }, [activeImages.length, currentIndex])
 
   // Auto-advance slideshow
   useEffect(() => {
@@ -60,11 +46,11 @@ function Slideshow({ onShowNav }: SlideshowProps) {
     const interval = setInterval(() => {
       setCurrentIndex((prev) => {
         const nextIndex = (prev + 1) % activeImages.length
-        const nextImageId = activeImages[nextIndex]?.id || null
-        setCurrentImageId(nextImageId)
-        // Notify server of current image change
+        // Notify server of auto-advance
+        const nextImageId = activeImages[nextIndex]?.id
         if (nextImageId) {
           setCurrentImage(nextImageId)
+          lastServerImageIdRef.current = nextImageId
         }
         return nextIndex
       })
@@ -73,23 +59,7 @@ function Slideshow({ onShowNav }: SlideshowProps) {
     return () => clearInterval(interval)
   }, [activeImages, duration, setCurrentImage])
 
-  // Update current image ID when index changes manually
-  useEffect(() => {
-    if (activeImages.length > 0) {
-      const safeIndex = Math.min(currentIndex, activeImages.length - 1)
-      if (safeIndex !== currentIndex) {
-        setCurrentIndex(safeIndex)
-      }
-      
-      const image = activeImages[safeIndex]
-      if (image && image.id !== currentImageId) {
-        setCurrentImageId(image.id)
-        setCurrentImage(image.id)
-      }
-    }
-  }, [currentIndex, activeImages, currentImageId, setCurrentImage])
-
-  // Keyboard navigation
+  // Handle keyboard navigation
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (activeImages.length === 0) return
@@ -97,12 +67,30 @@ function Slideshow({ onShowNav }: SlideshowProps) {
       switch(e.key) {
         case 'ArrowLeft':
           if (activeImages.length > 1) {
-            setCurrentIndex((prev) => (prev - 1 + activeImages.length) % activeImages.length)
+            setCurrentIndex((prev) => {
+              const nextIndex = (prev - 1 + activeImages.length) % activeImages.length
+              // Notify server of manual navigation
+              const nextImageId = activeImages[nextIndex]?.id
+              if (nextImageId) {
+                setCurrentImage(nextImageId)
+                lastServerImageIdRef.current = nextImageId
+              }
+              return nextIndex
+            })
           }
           break
         case 'ArrowRight':
           if (activeImages.length > 1) {
-            setCurrentIndex((prev) => (prev + 1) % activeImages.length)
+            setCurrentIndex((prev) => {
+              const nextIndex = (prev + 1) % activeImages.length
+              // Notify server of manual navigation
+              const nextImageId = activeImages[nextIndex]?.id
+              if (nextImageId) {
+                setCurrentImage(nextImageId)
+                lastServerImageIdRef.current = nextImageId
+              }
+              return nextIndex
+            })
           }
           break
         case 'Escape':
@@ -113,7 +101,7 @@ function Slideshow({ onShowNav }: SlideshowProps) {
 
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [activeImages.length, onShowNav])
+  }, [activeImages, onShowNav, setCurrentImage])
 
   if (!connected) {
     return (
@@ -136,12 +124,15 @@ function Slideshow({ onShowNav }: SlideshowProps) {
     )
   }
 
+  // Ensure index is valid
+  const safeIndex = Math.min(currentIndex, activeImages.length - 1)
+
   return (
     <div className="slideshow-container">
       {activeImages.map((image, index) => (
         <div
           key={image.id}
-          className={`slideshow-image ${index === currentIndex ? 'active' : ''}`}
+          className={`slideshow-image ${index === safeIndex ? 'active' : ''}`}
         >
           <img src={image.path} alt={image.originalName} />
         </div>
