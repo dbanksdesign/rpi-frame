@@ -463,8 +463,21 @@ function Admin() {
           cols={{ base: 1, sm: 2, md: 3, lg: 4 }}
           spacing="lg"
         >
-          {filteredImages.map((image) => (
-            <Card key={image.id} shadow="sm" padding="lg" radius="md" withBorder>
+          {filteredImages.map((image) => {
+            const isNowPlaying = slideshowState.currentImageId === image.id
+            return (
+            <Card 
+              key={image.id} 
+              shadow={isNowPlaying ? 'lg' : 'sm'} 
+              padding="lg" 
+              radius="md" 
+              withBorder
+              style={isNowPlaying ? { 
+                borderColor: 'var(--mantine-color-green-6)', 
+                borderWidth: 2,
+                boxShadow: '0 0 12px var(--mantine-color-green-3)'
+              } : undefined}
+            >
               <Card.Section pos="relative">
                 <MantineImage
                   src={image.path}
@@ -472,6 +485,19 @@ function Admin() {
                   h={200}
                   fit="cover"
                 />
+                {isNowPlaying && (
+                  <Badge
+                    color="green"
+                    size="lg"
+                    pos="absolute"
+                    top={10}
+                    left={10}
+                    variant="filled"
+                    leftSection={<IconPlayerPlay size={12} />}
+                  >
+                    Now Playing
+                  </Badge>
+                )}
                 {!image.active && (
                   <Badge
                     color="gray"
@@ -539,19 +565,21 @@ function Admin() {
                 </Group>
                 {image.active && (
                   <Button
-                    variant="filled"
+                    variant={isNowPlaying ? 'light' : 'filled'}
                     color="blue"
                     leftSection={<IconPlayerPlay size={16} />}
                     onClick={() => showImageNow(image.id)}
                     size="xs"
                     fullWidth
+                    disabled={isNowPlaying}
                   >
-                    Show Now
+                    {isNowPlaying ? 'Playing' : 'Show Now'}
                   </Button>
                 )}
               </Stack>
             </Card>
-          ))}
+            )
+          })}
         </SimpleGrid>
       )}
     </Container>
