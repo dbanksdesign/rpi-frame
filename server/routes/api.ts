@@ -24,6 +24,7 @@ import {
   setActiveCollection
 } from '../utils/imageStore';
 import { getProjectRoot } from '../utils/filesystem';
+import { broadcastImagesUpdated, broadcastStateUpdated, broadcastCollectionsUpdated } from '../utils/websocket';
 
 const execPromise = promisify(exec);
 
@@ -101,6 +102,7 @@ router.post('/slideshow/current', (req: Request, res: Response) => {
   try {
     const { imageId } = req.body;
     setCurrentImage(imageId);
+    broadcastStateUpdated();
     res.json({ success: true, currentImageId: imageId });
   } catch (error) {
     res.status(500).json({ error: 'Failed to set current image' });
@@ -115,6 +117,7 @@ router.post('/slideshow/duration', (req: Request, res: Response) => {
       return res.status(400).json({ error: 'Duration must be at least 1000ms' });
     }
     setSlideshowDuration(duration);
+    broadcastStateUpdated();
     res.json({ success: true, duration });
   } catch (error) {
     res.status(500).json({ error: 'Failed to set slideshow duration' });
@@ -126,6 +129,8 @@ router.post('/slideshow/collection', (req: Request, res: Response) => {
   try {
     const { collectionId } = req.body;
     setActiveCollection(collectionId);
+    broadcastStateUpdated();
+    broadcastImagesUpdated(); // Images list changes when collection filter changes
     res.json({ success: true, activeCollectionId: collectionId });
   } catch (error) {
     res.status(500).json({ error: 'Failed to set active collection' });
@@ -161,6 +166,7 @@ router.post('/collections', (req: Request, res: Response) => {
     };
     
     addCollection(collection);
+    broadcastCollectionsUpdated();
     res.json(collection);
   } catch (error) {
     res.status(500).json({ error: 'Failed to create collection' });
@@ -187,6 +193,7 @@ router.patch('/collections/:id', (req: Request, res: Response) => {
     const success = updateCollection(id, updates);
     
     if (success) {
+      broadcastCollectionsUpdated();
       res.json({ success: true });
     } else {
       res.status(404).json({ error: 'Collection not found' });
@@ -203,6 +210,8 @@ router.delete('/collections/:id', (req: Request, res: Response) => {
     const success = removeCollection(id);
     
     if (success) {
+      broadcastCollectionsUpdated();
+      broadcastImagesUpdated(); // Images may have collection references removed
       res.json({ success: true });
     } else {
       res.status(404).json({ error: 'Collection not found' });
@@ -219,6 +228,7 @@ router.post('/collections/:collectionId/images/:imageId', (req: Request, res: Re
     const success = addImageToCollection(imageId, collectionId);
     
     if (success) {
+      broadcastImagesUpdated();
       res.json({ success: true });
     } else {
       res.status(404).json({ error: 'Image not found' });
@@ -235,6 +245,7 @@ router.delete('/collections/:collectionId/images/:imageId', (req: Request, res: 
     const success = removeImageFromCollection(imageId, collectionId);
     
     if (success) {
+      broadcastImagesUpdated();
       res.json({ success: true });
     } else {
       res.status(404).json({ error: 'Image not found or not in collection' });
@@ -262,6 +273,7 @@ router.post('/images/upload', upload.single('image'), (req: Request, res: Respon
     };
 
     addImage(imageMetadata);
+    broadcastImagesUpdated();
     res.json(imageMetadata);
   } catch (error) {
     res.status(500).json({ error: 'Failed to upload image' });
@@ -275,6 +287,7 @@ router.patch('/images/:id/toggle', (req: Request, res: Response) => {
     const success = toggleImageActive(id);
     
     if (success) {
+      broadcastImagesUpdated();
       res.json({ success: true });
     } else {
       res.status(404).json({ error: 'Image not found' });
@@ -303,6 +316,7 @@ router.delete('/images/:id', (req: Request, res: Response) => {
 
     // Remove from metadata
     removeImage(id);
+    broadcastImagesUpdated();
     res.json({ success: true });
   } catch (error) {
     res.status(500).json({ error: 'Failed to delete image' });

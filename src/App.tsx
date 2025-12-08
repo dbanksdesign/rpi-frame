@@ -3,6 +3,7 @@ import { useState, useEffect } from 'react'
 import { AppShell, Group, Title, Button, ActionIcon, useMantineColorScheme, Box } from '@mantine/core'
 import { IconSun, IconMoon, IconPhoto, IconSettings, IconDeviceDesktop, IconDeviceDesktopOff, IconFrame } from '@tabler/icons-react'
 import { useMediaQuery } from '@mantine/hooks'
+import { WebSocketProvider } from './context/WebSocketContext'
 import Slideshow from './components/Slideshow'
 import Admin from './components/Admin'
 import ErrorBoundary from './components/ErrorBoundary'
@@ -156,42 +157,19 @@ function AppContent() {
   const isSlideshow = location.pathname === '/slideshow'
   const [displayOn, setDisplayOn] = useState(true)
 
-  // Poll display status periodically, but slow down when display is off
+  // Fetch display status once on mount
   useEffect(() => {
-    let interval: NodeJS.Timeout
-
-    const checkDisplayStatus = async () => {
+    const fetchDisplayStatus = async () => {
       try {
         const response = await fetch('/api/display/status')
         const data = await response.json()
-        const wasOff = !displayOn
-        const nowOff = !data.isOn
-        
         setDisplayOn(data.isOn)
-        
-        // If display just turned off, restart interval with longer delay
-        // If display just turned on, restart interval with shorter delay
-        if (wasOff !== nowOff) {
-          clearInterval(interval)
-          if (nowOff) {
-            // When off, check much less frequently to avoid waking display
-            interval = setInterval(checkDisplayStatus, 30000) // Every 30 seconds
-          } else {
-            // When on, check more frequently
-            interval = setInterval(checkDisplayStatus, 5000) // Every 5 seconds
-          }
-        }
       } catch (error) {
-        console.error('Failed to check display status:', error)
+        console.error('Failed to fetch display status:', error)
       }
     }
-
-    // Check immediately and start with 5 second interval
-    checkDisplayStatus()
-    interval = setInterval(checkDisplayStatus, 5000)
-
-    return () => clearInterval(interval)
-  }, [displayOn])
+    fetchDisplayStatus()
+  }, [])
 
   if (isSlideshow) {
     return (
@@ -228,10 +206,11 @@ function AppContent() {
 function App() {
   return (
     <BrowserRouter>
-      <AppContent />
+      <WebSocketProvider>
+        <AppContent />
+      </WebSocketProvider>
     </BrowserRouter>
   )
 }
 
 export default App
-

@@ -2,11 +2,17 @@ import express from 'express';
 import cors from 'cors';
 import path from 'path';
 import fs from 'fs';
+import { createServer } from 'http';
 import { router as apiRouter } from './routes/api';
 import { ensureDirectories, getProjectRoot } from './utils/filesystem';
+import { initWebSocketServer } from './utils/websocket';
 
 const app = express();
+const server = createServer(app);
 const PORT = process.env.PORT || 3000;
+
+// Initialize WebSocket server
+initWebSocketServer(server);
 
 // Middleware
 app.use(cors());
@@ -40,8 +46,9 @@ if (fs.existsSync(indexPath)) {
   });
 }
 
-app.listen(Number(PORT), '0.0.0.0', () => {
+server.listen(Number(PORT), '0.0.0.0', () => {
   console.log(`Server running on http://0.0.0.0:${PORT}`);
+  console.log(`WebSocket available at ws://0.0.0.0:${PORT}/ws`);
   console.log(`Access from other devices on your network using your Pi's IP address`);
 });
 

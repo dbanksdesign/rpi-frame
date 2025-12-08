@@ -25,44 +25,27 @@ import {
   Chip,
 } from '@mantine/core'
 import { IconUpload, IconEye, IconEyeOff, IconTrash, IconPhoto, IconPlayerPlay, IconClock, IconFolder, IconFolderPlus } from '@tabler/icons-react'
+import { useWebSocket } from '../context/WebSocketContext'
 import './Admin.css'
-
-interface Image {
-  id: string
-  filename: string
-  originalName: string
-  path: string
-  uploadedAt: string
-  active: boolean
-  collectionIds: string[]
-}
-
-interface Collection {
-  id: string
-  name: string
-  description?: string
-  createdAt: string
-}
-
-interface SlideshowState {
-  currentImageId: string | null
-  duration: number
-  activeCollectionId: string | null
-}
 
 type TimeUnit = 'seconds' | 'minutes' | 'hours'
 
 function Admin() {
-  const [images, setImages] = useState<Image[]>([])
-  const [collections, setCollections] = useState<Collection[]>([])
-  const [loading, setLoading] = useState(true)
+  const { 
+    images, 
+    collections, 
+    slideshowState, 
+    connected,
+    setCurrentImage,
+    setDuration: wsSetDuration,
+    setActiveCollection: wsSetActiveCollection,
+  } = useWebSocket()
+
   const [uploading, setUploading] = useState(false)
   const [notification, setNotification] = useState<string | null>(null)
   const [files, setFiles] = useState<File[]>([])
   const [durationValue, setDurationValue] = useState(2)
   const [durationUnit, setDurationUnit] = useState<TimeUnit>('minutes')
-  const [durationSaving, setDurationSaving] = useState(false)
-  const [activeCollectionId, setActiveCollectionId] = useState<string | null>(null)
   const [filterCollectionId, setFilterCollectionId] = useState<string | null>(null)
   const [createCollectionOpen, setCreateCollectionOpen] = useState(false)
   const [newCollectionName, setNewCollectionName] = useState('')
@@ -73,11 +56,12 @@ function Admin() {
     setTimeout(() => setNotification(null), 3000)
   }
 
+  // Sync duration UI with server state
   useEffect(() => {
-    fetchImages()
-    fetchCollections()
-    fetchSlideshowState() // Load duration and collection on initial mount
-  }, [])
+    const { value, unit } = convertMsToValueAndUnit(slideshowState.duration)
+    setDurationValue(value)
+    setDurationUnit(unit)
+  }, [slideshowState.duration])
 
   useEffect(() => {
     if (files.length > 0) {
@@ -86,37 +70,7 @@ function Admin() {
     }
   }, [files])
 
-  const fetchImages = async () => {
-    try {
-      const response = await fetch('/api/images')
-      if (!response.ok) throw new Error('Failed to fetch images')
-      const data = await response.json()
-      // Ensure collectionIds is initialized for backwards compatibility
-      const imagesWithCollections = data.map((img: Image) => ({
-        ...img,
-        collectionIds: img.collectionIds || []
-      }))
-      setImages(imagesWithCollections)
-      setLoading(false)
-    } catch (err) {
-      console.error('Error fetching images:', err)
-      setLoading(false)
-    }
-  }
-
-  const fetchCollections = async () => {
-    try {
-      const response = await fetch('/api/collections')
-      if (!response.ok) throw new Error('Failed to fetch collections')
-      const data = await response.json()
-      setCollections(data)
-    } catch (err) {
-      console.error('Error fetching collections:', err)
-    }
-  }
-
   const convertMsToValueAndUnit = (ms: number): { value: number; unit: TimeUnit } => {
-    // Try to find the best unit that results in a whole number
     const hours = ms / (1000 * 60 * 60)
     const minutes = ms / (1000 * 60)
     const seconds = ms / 1000
@@ -141,40 +95,12 @@ function Admin() {
     }
   }
 
-  const fetchSlideshowState = async () => {
-    try {
-      const response = await fetch('/api/slideshow/state')
-      if (!response.ok) throw new Error('Failed to fetch slideshow state')
-      const data: SlideshowState = await response.json()
-      setActiveCollectionId(data.activeCollectionId)
-      
-      const { value, unit } = convertMsToValueAndUnit(data.duration)
-      setDurationValue(value)
-      setDurationUnit(unit)
-    } catch (err) {
-      console.error('Error fetching slideshow state:', err)
-    }
+  const showImageNow = (imageId: string) => {
+    setCurrentImage(imageId)
+    showNotification('Image will display now on the frame!')
   }
 
-  const showImageNow = async (imageId: string) => {
-    try {
-      const response = await fetch('/api/slideshow/current', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ imageId }),
-      })
-
-      if (!response.ok) throw new Error('Failed to set current image')
-      showNotification('Image will display now on the frame!')
-    } catch (err) {
-      console.error('Error setting current image:', err)
-      alert('Failed to set current image')
-    }
-  }
-
-  const updateDuration = async () => {
+  const updateDuration = () => {
     if (durationValue < 1) {
       alert('Duration must be at least 1')
       return
@@ -187,24 +113,8 @@ function Admin() {
       return
     }
 
-    setDurationSaving(true)
-    try {
-      const response = await fetch('/api/slideshow/duration', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ duration: durationMs }),
-      })
-
-      if (!response.ok) throw new Error('Failed to update duration')
-      showNotification('Duration updated! Changes will apply to the next photo.')
-    } catch (err) {
-      console.error('Error updating duration:', err)
-      alert('Failed to update duration')
-    } finally {
-      setDurationSaving(false)
-    }
+    wsSetDuration(durationMs)
+    showNotification('Duration updated! Changes will apply to the next photo.')
   }
 
   const handleUpload = async (filesToUpload: File[]) => {
@@ -225,7 +135,6 @@ function Admin() {
         if (!response.ok) throw new Error('Upload failed')
       }
 
-      await fetchImages()
       showNotification('Photos uploaded! Slideshow will update automatically.')
     } catch (err) {
       console.error('Error uploading images:', err)
@@ -242,7 +151,6 @@ function Admin() {
       })
 
       if (!response.ok) throw new Error('Toggle failed')
-      await fetchImages()
       showNotification('Updated! Slideshow will refresh shortly.')
     } catch (err) {
       console.error('Error toggling image:', err)
@@ -258,7 +166,6 @@ function Admin() {
       })
 
       if (!response.ok) throw new Error('Delete failed')
-      await fetchImages()
       showNotification('Photo deleted! Slideshow will update automatically.')
     } catch (err) {
       console.error('Error deleting image:', err)
@@ -284,7 +191,6 @@ function Admin() {
       })
 
       if (!response.ok) throw new Error('Failed to create collection')
-      await fetchCollections()
       setCreateCollectionOpen(false)
       setNewCollectionName('')
       setNewCollectionDescription('')
@@ -304,10 +210,10 @@ function Admin() {
       })
 
       if (!response.ok) throw new Error('Failed to delete collection')
-      await fetchCollections()
-      await fetchImages()
-      if (activeCollectionId === id) {
-        setActiveCollectionToSlideshow(null)
+      
+      // If this was the active collection, clear it
+      if (slideshowState.activeCollectionId === id) {
+        wsSetActiveCollection(null)
       }
       showNotification('Collection deleted!')
     } catch (err) {
@@ -324,7 +230,6 @@ function Admin() {
       })
 
       if (!response.ok) throw new Error('Failed to update collection')
-      await fetchImages()
       showNotification(isInCollection ? 'Photo removed from collection!' : 'Photo added to collection!')
     } catch (err) {
       console.error('Error updating collection:', err)
@@ -332,31 +237,17 @@ function Admin() {
     }
   }
 
-  const setActiveCollectionToSlideshow = async (collectionId: string | null) => {
-    try {
-      const response = await fetch('/api/slideshow/collection', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ collectionId }),
-      })
-
-      if (!response.ok) throw new Error('Failed to set active collection')
-      setActiveCollectionId(collectionId)
-      showNotification(collectionId ? 'Collection activated!' : 'Showing all active photos!')
-    } catch (err) {
-      console.error('Error setting active collection:', err)
-      alert('Failed to set active collection')
-    }
+  const setActiveCollectionToSlideshow = (collectionId: string | null) => {
+    wsSetActiveCollection(collectionId)
+    showNotification(collectionId ? 'Collection activated!' : 'Showing all active photos!')
   }
 
-  if (loading) {
+  if (!connected) {
     return (
       <Container size="xl" py="xl">
         <Stack align="center" justify="center" style={{ minHeight: '50vh' }}>
           <Loader size="lg" />
-          <Text c="dimmed">Loading photos...</Text>
+          <Text c="dimmed">Connecting...</Text>
         </Stack>
       </Container>
     )
@@ -364,7 +255,7 @@ function Admin() {
 
   // Filter images by selected collection
   const filteredImages = filterCollectionId
-    ? images.filter(img => img.collectionIds.includes(filterCollectionId))
+    ? images.filter(img => img.collectionIds?.includes(filterCollectionId))
     : images
 
   return (
@@ -405,8 +296,8 @@ function Admin() {
             <Text size="xs" c="dimmed" mb="sm">Choose which collection to display in the slideshow</Text>
             <Group gap="md">
               <Select
-                value={activeCollectionId}
-                onChange={setActiveCollectionToSlideshow}
+                value={slideshowState.activeCollectionId || ''}
+                onChange={(value) => setActiveCollectionToSlideshow(value || null)}
                 data={[
                   { value: '', label: 'All Active Photos' },
                   ...collections.map(c => ({ value: c.id, label: c.name }))
@@ -445,7 +336,6 @@ function Admin() {
               />
               <Button
                 onClick={updateDuration}
-                loading={durationSaving}
                 variant="light"
               >
                 Apply
@@ -475,8 +365,8 @@ function Admin() {
               <Badge
                 key={collection.id}
                 size="lg"
-                variant={activeCollectionId === collection.id ? 'filled' : 'light'}
-                color={activeCollectionId === collection.id ? 'green' : 'blue'}
+                variant={slideshowState.activeCollectionId === collection.id ? 'filled' : 'light'}
+                color={slideshowState.activeCollectionId === collection.id ? 'green' : 'blue'}
                 style={{ cursor: 'pointer' }}
                 rightSection={
                   <ActionIcon
@@ -503,8 +393,8 @@ function Admin() {
       <Group justify="space-between" mb="md">
         <Title order={3}>Photos</Title>
         <Select
-          value={filterCollectionId}
-          onChange={setFilterCollectionId}
+          value={filterCollectionId || ''}
+          onChange={(value) => setFilterCollectionId(value || null)}
           data={[
             { value: '', label: 'All Photos' },
             ...collections.map(c => ({ value: c.id, label: c.name }))
@@ -611,12 +501,12 @@ function Admin() {
                     <Text size="xs" c="dimmed" mb={4}>Collections:</Text>
                     <Group gap={4}>
                       {collections.map((collection) => {
-                        const isInCollection = image.collectionIds.includes(collection.id)
+                        const isInCollection = image.collectionIds?.includes(collection.id)
                         return (
                           <Chip
                             key={collection.id}
                             checked={isInCollection}
-                            onChange={() => toggleImageInCollection(image.id, collection.id, isInCollection)}
+                            onChange={() => toggleImageInCollection(image.id, collection.id, isInCollection ?? false)}
                             size="xs"
                           >
                             {collection.name}
@@ -669,4 +559,3 @@ function Admin() {
 }
 
 export default Admin
-

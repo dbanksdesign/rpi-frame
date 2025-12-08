@@ -1,209 +1,108 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useRef } from 'react'
+import { useWebSocket } from '../context/WebSocketContext'
 import './Slideshow.css'
-
-interface Image {
-  id: string
-  filename: string
-  originalName: string
-  path: string
-  uploadedAt: string
-  active: boolean
-}
 
 interface SlideshowProps {
   onShowNav?: () => void
 }
 
-interface SlideshowState {
-  currentImageId: string | null
-  duration: number
-  activeCollectionId: string | null
-}
-
-const REFRESH_INTERVAL = 5000 // Check for new images every 5 seconds
-const STATE_POLL_INTERVAL = 1000 // Check for state changes every second
-
 function Slideshow({ onShowNav }: SlideshowProps) {
-  const [images, setImages] = useState<Image[]>([])
+  const { activeImages, slideshowState, connected, setCurrentImage } = useWebSocket()
   const [currentIndex, setCurrentIndex] = useState(0)
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState<string | null>(null)
-  const [showControls, setShowControls] = useState(false)
   const [currentImageId, setCurrentImageId] = useState<string | null>(null)
-  const [duration, setDuration] = useState(120000) // 2 minutes default
-  const [activeCollectionId, setActiveCollectionId] = useState<string | null>(null)
+  const lastSyncedImageIdRef = useRef<string | null>(null)
 
-  // Fetch slideshow state (current image, duration, and active collection)
-  const fetchSlideshowState = useCallback(async () => {
-    try {
-      const response = await fetch('/api/slideshow/state')
-      if (!response.ok) throw new Error('Failed to fetch slideshow state')
-      const data: SlideshowState = await response.json()
-      
-      setDuration(data.duration)
-      
-      // Update active collection if changed
-      if (data.activeCollectionId !== activeCollectionId) {
-        setActiveCollectionId(data.activeCollectionId)
-      }
-      
-      // If the server has a different current image, jump to it
-      if (data.currentImageId && data.currentImageId !== currentImageId) {
-        const newIndex = images.findIndex(img => img.id === data.currentImageId)
-        if (newIndex !== -1) {
-          setCurrentIndex(newIndex)
-          setCurrentImageId(data.currentImageId)
-        }
-      }
-    } catch (err) {
-      console.error('Failed to fetch slideshow state:', err)
-    }
-  }, [images, currentImageId, activeCollectionId])
+  const { duration, currentImageId: serverCurrentImageId } = slideshowState
 
-  // Update server with current image
-  const updateCurrentImage = useCallback(async (imageId: string | null) => {
-    try {
-      await fetch('/api/slideshow/current', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ imageId }),
-      })
-    } catch (err) {
-      console.error('Failed to update current image:', err)
-    }
-  }, [])
-
-  const fetchActiveImages = useCallback(async () => {
-    try {
-      // Fetch images filtered by active collection if one is set
-      const url = activeCollectionId 
-        ? `/api/images/active?collectionId=${activeCollectionId}`
-        : '/api/images/active'
-      const response = await fetch(url)
-      if (!response.ok) throw new Error('Failed to fetch images')
-      const data: Image[] = await response.json()
-      
-      setImages((prevImages) => {
-        // Check if image list has changed
-        const prevIds = prevImages.map(img => img.id).join(',')
-        const newIds = data.map(img => img.id).join(',')
-        const hasChanged = prevIds !== newIds
-        
-        if (hasChanged && prevImages.length > 0) {
-          // Image list changed - adjust current index
-          setCurrentImageId((prevId) => {
-            if (prevId) {
-              const newIndex = data.findIndex(img => img.id === prevId)
-              if (newIndex !== -1) {
-                // Current image still exists
-                setCurrentIndex(newIndex)
-              } else {
-                // Current image was removed, find best new index
-                const safeIndex = Math.min(currentIndex, Math.max(0, data.length - 1))
-                setCurrentIndex(safeIndex)
-                return data[safeIndex]?.id || null
-              }
-            }
-            return prevId
-          })
-        } else if (data.length > 0 && prevImages.length === 0) {
-          // First load - set initial image
-          const initialImageId = data[0].id
-          setCurrentImageId(initialImageId)
-          setCurrentIndex(0)
-          updateCurrentImage(initialImageId)
-        }
-        
-        return data
-      })
-      
-      setLoading(false)
-      
-      if (data.length === 0) {
-        setError('No active images to display')
-        setCurrentImageId(null)
-      } else {
-        setError(null)
-      }
-    } catch (err) {
-      setError('Failed to load images')
-      setLoading(false)
-    }
-  }, [updateCurrentImage, activeCollectionId])
-
+  // Sync with server's current image when it changes (e.g., from admin "Show Now")
   useEffect(() => {
-    fetchActiveImages()
-    const interval = setInterval(fetchActiveImages, REFRESH_INTERVAL)
-    return () => clearInterval(interval)
-  }, [fetchActiveImages])
-
-  // Poll for state changes (current image selection from admin panel)
-  useEffect(() => {
-    const interval = setInterval(fetchSlideshowState, STATE_POLL_INTERVAL)
-    return () => clearInterval(interval)
-  }, [fetchSlideshowState])
-
-  useEffect(() => {
-    if (images.length === 0) return
-
-    // For single image, no need to cycle but still update the image
-    if (images.length === 1) {
-      const singleImageId = images[0]?.id || null
-      if (currentImageId !== singleImageId) {
-        setCurrentImageId(singleImageId)
-        updateCurrentImage(singleImageId)
+    if (serverCurrentImageId && serverCurrentImageId !== lastSyncedImageIdRef.current) {
+      const idx = activeImages.findIndex(img => img.id === serverCurrentImageId)
+      if (idx !== -1) {
+        setCurrentIndex(idx)
+        setCurrentImageId(serverCurrentImageId)
+        lastSyncedImageIdRef.current = serverCurrentImageId
       }
+    }
+  }, [serverCurrentImageId, activeImages])
+
+  // Handle image list changes
+  useEffect(() => {
+    if (activeImages.length === 0) {
+      setCurrentImageId(null)
+      setCurrentIndex(0)
       return
     }
 
+    // If current image was removed, adjust index
+    if (currentImageId) {
+      const idx = activeImages.findIndex(img => img.id === currentImageId)
+      if (idx === -1) {
+        // Current image no longer in list, pick safe index
+        const safeIndex = Math.min(currentIndex, activeImages.length - 1)
+        setCurrentIndex(safeIndex)
+        setCurrentImageId(activeImages[safeIndex].id)
+      } else if (idx !== currentIndex) {
+        // Image moved position
+        setCurrentIndex(idx)
+      }
+    } else {
+      // No current image, set to first
+      setCurrentIndex(0)
+      setCurrentImageId(activeImages[0].id)
+    }
+  }, [activeImages, currentImageId, currentIndex])
+
+  // Auto-advance slideshow
+  useEffect(() => {
+    if (activeImages.length <= 1) return
+
     const interval = setInterval(() => {
       setCurrentIndex((prev) => {
-        const nextIndex = (prev + 1) % images.length
-        const nextImageId = images[nextIndex]?.id || null
+        const nextIndex = (prev + 1) % activeImages.length
+        const nextImageId = activeImages[nextIndex]?.id || null
         setCurrentImageId(nextImageId)
-        updateCurrentImage(nextImageId)
+        // Notify server of current image change
+        if (nextImageId) {
+          setCurrentImage(nextImageId)
+        }
         return nextIndex
       })
     }, duration)
 
     return () => clearInterval(interval)
-  }, [images, duration, updateCurrentImage, currentImageId])
+  }, [activeImages, duration, setCurrentImage])
 
   // Update current image ID when index changes manually
   useEffect(() => {
-    if (images.length > 0) {
-      // Ensure currentIndex is within bounds
-      const safeIndex = Math.min(currentIndex, images.length - 1)
+    if (activeImages.length > 0) {
+      const safeIndex = Math.min(currentIndex, activeImages.length - 1)
       if (safeIndex !== currentIndex) {
         setCurrentIndex(safeIndex)
       }
       
-      const image = images[safeIndex]
-      if (image) {
-        const newImageId = image.id
-        if (newImageId !== currentImageId) {
-          setCurrentImageId(newImageId)
-          updateCurrentImage(newImageId)
-        }
+      const image = activeImages[safeIndex]
+      if (image && image.id !== currentImageId) {
+        setCurrentImageId(image.id)
+        setCurrentImage(image.id)
       }
     }
-  }, [currentIndex, images, updateCurrentImage, currentImageId])
+  }, [currentIndex, activeImages, currentImageId, setCurrentImage])
 
+  // Keyboard navigation
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (images.length === 0) return
+      if (activeImages.length === 0) return
       
       switch(e.key) {
         case 'ArrowLeft':
-          if (images.length > 1) {
-            setCurrentIndex((prev) => (prev - 1 + images.length) % images.length)
+          if (activeImages.length > 1) {
+            setCurrentIndex((prev) => (prev - 1 + activeImages.length) % activeImages.length)
           }
           break
         case 'ArrowRight':
-          if (images.length > 1) {
-            setCurrentIndex((prev) => (prev + 1) % images.length)
+          if (activeImages.length > 1) {
+            setCurrentIndex((prev) => (prev + 1) % activeImages.length)
           }
           break
         case 'Escape':
@@ -214,21 +113,21 @@ function Slideshow({ onShowNav }: SlideshowProps) {
 
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [images.length, onShowNav])
+  }, [activeImages.length, onShowNav])
 
-  if (loading) {
+  if (!connected) {
     return (
       <div className="slideshow-container">
-        <div className="slideshow-message">Loading...</div>
+        <div className="slideshow-message">Connecting...</div>
       </div>
     )
   }
 
-  if (error || images.length === 0) {
+  if (activeImages.length === 0) {
     return (
       <div className="slideshow-container">
         <div className="slideshow-message">
-          {error || 'No images available'}
+          No active images to display
           <p className="slideshow-hint">
             Switch to "Manage Photos" to upload images
           </p>
@@ -238,10 +137,8 @@ function Slideshow({ onShowNav }: SlideshowProps) {
   }
 
   return (
-    <div 
-      className="slideshow-container"
-    >
-      {images.map((image, index) => (
+    <div className="slideshow-container">
+      {activeImages.map((image, index) => (
         <div
           key={image.id}
           className={`slideshow-image ${index === currentIndex ? 'active' : ''}`}
@@ -254,4 +151,3 @@ function Slideshow({ onShowNav }: SlideshowProps) {
 }
 
 export default Slideshow
-
