@@ -20,7 +20,9 @@ Pi 5 into a plug-and-play frame. It is idempotent: re-run it to repair or upgrad
    `/data/update-status.json` are written by the updater (root).
 6. **Persistence**: bind mounts from `/data/system` for NetworkManager profiles and
    `/var/lib/tailscale`, plus `/etc/fake-hwclock.data`, so WiFi, Tailscale and the clock
-   survive the read-only root. Existing profiles are kept.
+   survive the read-only root. Existing profiles are moved to `/data`: copied, then each
+   original is deleted from root once its copy is verified identical. The mounts are ordered
+   before NetworkManager and tailscaled.
 7. **Updater**: `/usr/local/sbin/frame-update`, plus a sudoers rule that lets `frame` run only
    `systemd-run --collect --unit=frame-update /usr/local/sbin/frame-update v…`.
 8. **systemd units** (`pi/units/`): `photo-frame-server.service` and `power-log.service`, plus
@@ -35,7 +37,8 @@ Pi 5 into a plug-and-play frame. It is idempotent: re-run it to repair or upgrad
 13. **First release**: runs `frame-update <tag>`, which downloads the release, starts the server
     and health-checks it. This is the installer's smoke test.
 14. **Overlay filesystem, last**: a read-only root (and boot partition), so pulling the plug
-    can't corrupt the OS. It is enabled only when `/data` is a separate partition.
+    can't corrupt the OS. It is enabled only when `/data` is a separate partition, as
+    `overlayroot=tmpfs:recurse=0` so that only `/` is overlaid and `/data` stays writable.
 
 It never reboots by itself.
 
@@ -82,9 +85,16 @@ without `$SUDO_USER`, because the owner key must go to a real login user.
    ./pi/install.sh --owner-key ~/owner.pub --name photoframe
    ```
    Run it from the LAN, not over Tailscale: the first run restarts `tailscaled`.
-4. **Before handing it over**, delete your own WiFi profile so it doesn't ship with the frame:
-   `nmcli -t -f NAME,TYPE connection show`, then `sudo nmcli connection delete '<name>'`.
-   Profiles live on `/data`, so this works even with the overlay on.
+4. **Before handing it over**, remove your own traces:
+   - **WiFi:** `nmcli -t -f NAME,TYPE connection show`, then `sudo nmcli connection delete '<name>'`.
+   - **Tailscale:** `sudo tailscale logout`, if you ever logged the frame into your own account.
+   - **Test photos:** delete them on the admin page. They are stored in `/data/uploads`.
+
+   These deletions are permanent even with the overlay on. On the first install the installer
+   moves the existing profiles and Tailscale state to `/data`, then deletes the originals from
+   the root filesystem. It deletes each original only once an identical copy is on `/data`. If
+   it keeps one (no identical copy), it prints a WARNING naming the file: delete that file by
+   hand.
 5. `sudo reboot`.
 
 ### One-time manual step: the FRAMEDATA partition
@@ -148,6 +158,20 @@ and the polkit rule.
 These were checked offline (package indexes, `raspi-config` source, containers), but not yet on a
 real Pi 5. Run through them on the test Pi:
 
+- **First: `/data` must stay writable with the overlay on.** With the overlay enabled, write a
+  file to `/data` and one to `/etc/NetworkManager/system-connections`, reboot, and confirm both
+  are still there. Also check that `/boot/firmware/cmdline.txt` starts with
+  `overlayroot=tmpfs:recurse=0` and that `findmnt /data` shows the ext4 partition (rw), not an
+  overlay.
+  - Why it matters: overlayroot defaults to `recurse=1`, which overlays every fstab mount. That
+    would put photos, WiFi and Tailscale state in RAM.
+  - What the installer does: it rewrites raspi-config's plain `overlayroot=tmpfs` to the
+    `recurse=0` form, and `--writable` strips every form of the token. Both behaviours were
+    checked against the overlayroot and raspi-config scripts, not on a device.
+  - Also confirm `--writable` plus a reboot really gives a writable root.
+- Boot ordering: the bind mounts carry `x-systemd.before=NetworkManager.service` and
+  `x-systemd.before=tailscaled.service`. The generator output was checked in a container. Still
+  to check: after a power cut, NetworkManager and tailscaled come up with the `/data` copies.
 - Step 1 preflight on a real Pi (`systemd-detect-virt`, the os-release values).
 - Step 2: the full apt run on Pi OS, including `chromium` providing `chromium-browser` (it does
   according to the Raspberry Pi archive's file index), and installing `overlayroot`.

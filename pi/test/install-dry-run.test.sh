@@ -292,6 +292,67 @@ else
   skip "node not installed; polkit rule not parsed"
 fi
 
+# ---- 8b. fix round 1: boot ordering, root-copy leak, overlay recurse --------------
+run_install --dry-run --owner-key "$FIX/owner.pub"
+NM_BIND="$(printf '%s\n' "$OUT" | grep '^    fstab: .* /etc/NetworkManager/system-connections ' || true)"
+TS_BIND="$(printf '%s\n' "$OUT" | grep '^    fstab: .* /var/lib/tailscale ' || true)"
+assert_contains "$NM_BIND" "x-systemd.before=NetworkManager.service" "NM bind is ordered before NetworkManager"
+assert_contains "$TS_BIND" "x-systemd.before=tailscaled.service" "Tailscale bind is ordered before tailscaled"
+assert_contains "$NM_BIND" "nofail" "NM bind still nofail"
+assert_contains "$OUT" "delete originals under /etc/NetworkManager/system-connections" "NM originals removed from root"
+assert_contains "$OUT" "delete originals under /var/lib/tailscale" "Tailscale originals removed from root"
+assert_contains "$OUT" "sudo tailscale logout" "handoff note: tailscale logout"
+assert_contains "$OUT" "test photos" "handoff note: test photos"
+assert_contains "$OUT" "overlayroot=tmpfs:recurse=0" "overlay must not recurse into /data"
+run_install --dry-run --owner-key "$FIX/owner.pub" --writable
+assert_contains "$OUT" "remove every overlayroot=tmpfs token" "--writable strips every overlay token"
+
+# cmdline token helpers (pure)
+cl() { bash -c 'source "$1"; shift; "$@"' _ "$INSTALL" "$@"; }
+assert_eq "$(cl cmdline_overlay_enable 'console=tty1 root=PARTUUID=ab-02 rootwait')" \
+  "overlayroot=tmpfs:recurse=0 console=tty1 root=PARTUUID=ab-02 rootwait" "enable prepends the recurse=0 token"
+assert_eq "$(cl cmdline_overlay_enable 'overlayroot=tmpfs console=tty1 rootwait')" \
+  "overlayroot=tmpfs:recurse=0 console=tty1 rootwait" "enable rewrites raspi-config's plain token"
+assert_eq "$(cl cmdline_overlay_enable 'overlayroot=tmpfs:recurse=0 console=tty1')" \
+  "overlayroot=tmpfs:recurse=0 console=tty1" "enable is idempotent"
+assert_eq "$(cl cmdline_overlay_enable 'a overlayroot=tmpfs:swap=1 b overlayroot=tmpfs c')" \
+  "overlayroot=tmpfs:recurse=0 a b c" "enable leaves exactly one token"
+assert_eq "$(cl cmdline_overlay_strip 'overlayroot=tmpfs:recurse=0 console=tty1 rootwait')" \
+  "console=tty1 rootwait" "strip removes the recurse=0 token"
+assert_eq "$(cl cmdline_overlay_strip 'overlayroot=tmpfs console=tty1')" "console=tty1" "strip removes the plain token"
+assert_eq "$(cl cmdline_overlay_strip 'a overlayroot=tmpfs:recurse=0,swap=1 b overlayroot=tmpfs')" "a b" "strip removes every variant"
+assert_eq "$(cl cmdline_overlay_strip 'console=tty1 noverlayroot=tmpfs')" "console=tty1 noverlayroot=tmpfs" "strip leaves other tokens"
+if cl cmdline_has_overlay 'console=tty1 overlayroot=tmpfs:recurse=0'; then ok; else bad "has_overlay: recurse=0 variant"; fi
+if cl cmdline_has_overlay 'overlayroot=tmpfs rootwait'; then ok; else bad "has_overlay: plain token"; fi
+if cl cmdline_has_overlay 'console=tty1 rootwait'; then bad "has_overlay: no token"; else ok; fi
+if cl cmdline_has_overlay 'overlayroot=disabled'; then bad "has_overlay: disabled"; else ok; fi
+if cl cmdline_overlay_ok 'overlayroot=tmpfs:recurse=0 console=tty1'; then ok; else bad "overlay_ok: recurse=0"; fi
+if cl cmdline_overlay_ok 'overlayroot=tmpfs console=tty1'; then bad "overlay_ok: plain token would recurse into /data"; else ok; fi
+
+# remove_copied_originals: deletes a root original only when /data holds an
+# identical copy (same content and mode); never touches the copy.
+MV="$ROOT/mv"
+mkdir -p "$MV/src/sub" "$MV/dst/sub" "$MV/src/emptydir"
+printf 'psk=owner\n' > "$MV/src/home.nmconnection"; cp -p "$MV/src/home.nmconnection" "$MV/dst/"
+printf 'new\n' > "$MV/src/differs.nmconnection"; printf 'other\n' > "$MV/dst/differs.nmconnection"
+printf 'only-on-root\n' > "$MV/src/notcopied.nmconnection"
+printf 'state\n' > "$MV/src/sub/tailscaled.state"; cp -p "$MV/src/sub/tailscaled.state" "$MV/dst/sub/"
+printf 'm\n' > "$MV/src/mode"; cp -p "$MV/src/mode" "$MV/dst/"; chmod 600 "$MV/src/mode"; chmod 644 "$MV/dst/mode"
+printf 'brother\n' > "$MV/dst/brother.nmconnection"
+bash -c 'source "$1"; as_root() { "$@"; }; DRY=0; remove_copied_originals "$2" "$3"' _ "$INSTALL" "$MV/src" "$MV/dst" > /dev/null
+present() { if [[ -e "$1" ]]; then ok; else bad "$2"; fi; }
+absent() { if [[ -e "$1" ]]; then bad "$2"; else ok; fi; }
+absent "$MV/src/home.nmconnection" "identical original not deleted"
+absent "$MV/src/sub/tailscaled.state" "identical nested original not deleted"
+present "$MV/src/differs.nmconnection" "differing original must be kept"
+present "$MV/src/notcopied.nmconnection" "uncopied original must be kept"
+present "$MV/src/mode" "original with a different mode must be kept"
+absent "$MV/src/emptydir" "empty subdirectory not removed"
+present "$MV/src" "source directory itself must stay (it is the mount point)"
+for f in home.nmconnection differs.nmconnection sub/tailscaled.state brother.nmconnection mode; do
+  present "$MV/dst/$f" "copy $f must never be deleted"
+done
+
 # ---- 9. scripts parse -----------------------------------------------------------
 for s in "$INSTALL" "$PI/power-log.sh"; do
   if bash -n "$s"; then ok; else bad "bash -n $s"; fi

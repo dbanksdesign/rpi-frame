@@ -228,6 +228,92 @@ plan_new_partition() {
   return 1
 }
 
+# Kernel cmdline helpers for the read-only overlay. raspi-config's
+# enable_overlayfs prepends a plain "overlayroot=tmpfs", and overlayroot's
+# init-bottom script then defaults to recurse=1, which also rewrites every
+# other fstab mount -- /data and the bind mounts -- as a read-only lower layer
+# plus a tmpfs upper, i.e. all photos, WiFi and Tailscale state would live in
+# RAM. recurse=0 overlays only /. raspi-config's disable_overlayfs only strips
+# the plain token ("overlayroot=tmpfs " followed by a space), so stripping is
+# done here for every variant.
+OVERLAY_TOKEN="overlayroot=tmpfs:recurse=0"
+
+is_overlay_token() { [[ "$1" == overlayroot=tmpfs || "$1" == overlayroot=tmpfs:* ]]; }
+
+# cmdline_overlay_strip <cmdline>: drop every overlayroot=tmpfs[:...] token.
+cmdline_overlay_strip() {
+  local out="" t
+  local -a toks=()
+  read -r -a toks <<< "$1" || true
+  for t in ${toks[@]+"${toks[@]}"}; do
+    if is_overlay_token "$t"; then continue; fi
+    out="$out${out:+ }$t"
+  done
+  printf '%s\n' "$out"
+}
+
+# cmdline_overlay_enable <cmdline>: exactly one token, overlayroot=tmpfs:recurse=0, first.
+cmdline_overlay_enable() {
+  local rest
+  rest="$(cmdline_overlay_strip "$1")"
+  printf '%s\n' "$OVERLAY_TOKEN${rest:+ $rest}"
+}
+
+# cmdline_has_overlay <cmdline>: any overlayroot=tmpfs[:...] token present.
+cmdline_has_overlay() {
+  local t
+  local -a toks=()
+  read -r -a toks <<< "$1" || true
+  for t in ${toks[@]+"${toks[@]}"}; do
+    if is_overlay_token "$t"; then return 0; fi
+  done
+  return 1
+}
+
+# cmdline_overlay_ok <cmdline>: the overlay is on AND will not recurse into /data.
+cmdline_overlay_ok() {
+  local t n=0 good=0
+  local -a toks=()
+  read -r -a toks <<< "$1" || true
+  for t in ${toks[@]+"${toks[@]}"}; do
+    if is_overlay_token "$t"; then
+      n=$((n + 1))
+      if [[ "$t" == "$OVERLAY_TOKEN" ]]; then good=1; fi
+    fi
+  done
+  [[ "$n" -eq 1 && "$good" -eq 1 ]]
+}
+
+# file_meta <path>: mode, owner and group as ls shows them (portable).
+file_meta() { as_root ls -ldn "$1" | awk '{ print $1, $3, $4 }'; }
+
+# remove_copied_originals <src dir> <dst dir>: after the first-time copy to
+# /data, delete each original under src (on the root filesystem, hidden by the
+# bind mount afterwards) ONLY if dst holds an identical copy: same content,
+# mode and owner. Anything else is kept and reported. Never touches dst, never
+# runs when src is already a mount point, and is safe to repeat.
+remove_copied_originals() {
+  local src=$1 dst=$2 f rel kept=0
+  printf '    delete originals under %s that have an identical copy (content, mode, owner) in %s\n' "$src" "$dst"
+  if [[ $DRY -eq 1 ]]; then return 0; fi
+  if command -v mountpoint > /dev/null 2>&1 && mountpoint -q "$src"; then
+    die "$src is already a mount point; not deleting anything there"
+  fi
+  while IFS= read -r -d '' f; do
+    rel="${f#"$src"/}"
+    if as_root test -f "$dst/$rel" && ! as_root test -L "$dst/$rel" \
+      && as_root cmp -s "$f" "$dst/$rel" \
+      && [[ "$(file_meta "$f")" == "$(file_meta "$dst/$rel")" ]]; then
+      as_root rm -f "$f"
+    else
+      kept=$((kept + 1))
+      warn "kept $f: no identical copy in $dst (check it and delete it by hand if it is yours)"
+    fi
+  done < <(as_root find "$src" -mindepth 1 -type f -print0)
+  as_root find "$src" -mindepth 1 -depth -type d -empty -delete
+  if [[ "$kept" -eq 0 ]]; then say "no originals left under $src"; fi
+}
+
 print_partition_howto() {
   say "To get a separate data partition (needed for the read-only overlay):"
   say "  1. Power off, put the SD card in another Linux machine (or boot the Pi"
@@ -398,7 +484,7 @@ step_preflight() {
   for f in "$REPO/start.sh" "$HERE/updater/frame-update.sh" "$HERE/units/$SERVER_UNIT"; do
     [[ -f "$f" ]] || die "missing $f; run the installer from a complete checkout"
   done
-  if grep -qw 'overlayroot=tmpfs' /proc/cmdline; then
+  if cmdline_has_overlay "$(cat /proc/cmdline)"; then
     OVERLAY_ACTIVE=1
     if [[ $WRITABLE -eq 0 ]]; then
       die "the read-only overlay filesystem is active, so changes would be lost at reboot. Run './pi/install.sh --writable ...', reboot, then re-run."
@@ -673,7 +759,10 @@ step_layout() {
 }
 
 # ---- step 6: persistence -----------------------------------------------------
-bind_line() { echo "$1 $2 none bind,nofail,x-systemd.requires-mounts-for=$DATA 0 0"; }
+# bind_line <source> <target> <service>: nofail drops the mount's ordering
+# before local-fs.target, so order it explicitly before the service that reads
+# the directory (ordering only: if /data is missing the service still starts).
+bind_line() { echo "$1 $2 none bind,nofail,x-systemd.requires-mounts-for=$DATA,x-systemd.before=$3 0 0"; }
 
 # needs_bind <target>: true when the bind mount still has to be set up (always
 # true in a dry run, which prints the whole first-install plan).
@@ -689,13 +778,16 @@ step_persistence() {
   local nm=/etc/NetworkManager/system-connections ts=/var/lib/tailscale
   ensure_dir "$DATA/system/NetworkManager" 0700 root:root
   ensure_dir "$DATA/system/tailscale" 0700 root:root
-  fstab_ensure "$nm" "$(bind_line "$DATA/system/NetworkManager" "$nm")"
-  fstab_ensure "$ts" "$(bind_line "$DATA/system/tailscale" "$ts")"
+  fstab_ensure "$nm" "$(bind_line "$DATA/system/NetworkManager" "$nm" NetworkManager.service)"
+  fstab_ensure "$ts" "$(bind_line "$DATA/system/tailscale" "$ts" tailscaled.service)"
   run systemctl daemon-reload
   # NetworkManager profiles (0600 root) are merged in, never overwritten.
   if needs_bind "$nm"; then
     ensure_dir "$nm" 0700 root:root
     run cp -an "$nm/." "$DATA/system/NetworkManager/"
+    # The originals (e.g. the owner's WiFi PSK) must not stay on root under the
+    # bind mount. NetworkManager keeps running from memory until the reload.
+    remove_copied_originals "$nm" "$DATA/system/NetworkManager"
     run mount "$nm"
     run nmcli connection reload
   fi
@@ -711,6 +803,7 @@ step_persistence() {
     elif [[ -z "$(as_root ls -A "$DATA/system/tailscale")" ]]; then
       run cp -a "$ts/." "$DATA/system/tailscale/"
     fi
+    remove_copied_originals "$ts" "$DATA/system/tailscale"
     run mount "$ts"
     run systemctl start tailscaled.service
     tailscale_operator
@@ -979,15 +1072,56 @@ boot_ro_configured() {
   grep -E '[[:space:]]/boot(/firmware)?[[:space:]]' /etc/fstab 2> /dev/null | grep -E 'defaults.*,ro[ ,]' > /dev/null
 }
 
+# Where raspi-config edits the kernel cmdline (same rule as raspi-config).
+boot_dir() { if [[ -e /boot/firmware/config.txt ]]; then echo /boot/firmware; else echo /boot; fi; }
+cmdline_path() {
+  local prefix=""
+  if [[ -e /proc/device-tree/chosen/os_prefix ]]; then prefix="$(tr -d '\0' < /proc/device-tree/chosen/os_prefix)"; fi
+  echo "$(boot_dir)/${prefix}cmdline.txt"
+}
+
+# set_cmdline_first_line <file> <line>: replace line 1 (the only line the
+# firmware reads), keep any others; temporarily remounts the boot partition
+# rw if it is mounted ro. No chown/chmod: it is vfat.
+set_cmdline_first_line() {
+  local file=$1 line=$2 tmp bdir was_ro=0
+  bdir="$(boot_dir)"
+  tmp="$(mktemp)"
+  { printf '%s\n' "$line"; awk 'NR > 1' "$file"; } > "$tmp"
+  if findmnt -n -o OPTIONS "$bdir" 2> /dev/null | tr ',' '\n' | grep -x ro > /dev/null; then
+    was_ro=1
+    run mount -o remount,rw "$bdir"
+  fi
+  as_root cp "$tmp" "$file.photo-frame-new"
+  as_root mv -f "$file.photo-frame-new" "$file"
+  rm -f "$tmp"
+  if [[ $was_ro -eq 1 ]]; then run mount -o remount,ro "$bdir" || warn "could not remount $bdir read-only"; fi
+}
+
 step_overlay() {
   step 14 "Overlay filesystem (read-only root)"
+  local cmdline cur new
   if [[ $WRITABLE -eq 1 ]]; then
     run raspi-config nonint disable_overlayfs
     if [[ $DRY -eq 1 ]]; then
+      say "then remove every overlayroot=tmpfs token (plain, :recurse=0 or any other options)"
+      say "  from /boot/firmware/cmdline.txt, re-read it, and abort loudly if one is left"
       say "(if the overlay is not active right now)"
       run raspi-config nonint disable_bootro
-    elif [[ $OVERLAY_ACTIVE -eq 0 ]]; then
-      if boot_ro_configured; then
+    else
+      cmdline="$(cmdline_path)"
+      IFS= read -r cur < "$cmdline" || true
+      new="$(cmdline_overlay_strip "$cur")"
+      if [[ "$new" != "$cur" ]]; then
+        say "remove every overlayroot=tmpfs token from $cmdline"
+        set_cmdline_first_line "$cmdline" "$new"
+      fi
+      IFS= read -r cur < "$cmdline" || true
+      if cmdline_has_overlay "$cur"; then
+        die "$cmdline still contains an overlayroot=tmpfs token after disabling; fix it by hand before rebooting, or the frame stays read-only"
+      fi
+      say "ok: $cmdline has no overlayroot token"
+      if [[ $OVERLAY_ACTIVE -eq 0 ]] && boot_ro_configured; then
         run raspi-config nonint disable_bootro
       fi
     fi
@@ -1004,6 +1138,9 @@ step_overlay() {
     say "(boot partition read-only: only if /etc/fstab does not already say so)"
     run raspi-config nonint enable_bootro
     run raspi-config nonint enable_overlayfs
+    say "then rewrite the token in /boot/firmware/cmdline.txt to $OVERLAY_TOKEN (overlayroot"
+    say "  defaults to recurse=1, which would put $DATA and the bind mounts in RAM), re-read"
+    say "  it, and abort if it is not exactly one $OVERLAY_TOKEN token"
     return 0
   fi
   if [[ $DATA_IS_PARTITION -ne 1 ]]; then
@@ -1015,10 +1152,18 @@ step_overlay() {
     run raspi-config nonint enable_bootro
   fi
   run raspi-config nonint enable_overlayfs
-  if grep -qw 'overlayroot=tmpfs' /boot/firmware/cmdline.txt 2> /dev/null; then
-    say "ok: the overlay filesystem is enabled from the next boot"
+  cmdline="$(cmdline_path)"
+  IFS= read -r cur < "$cmdline" || true
+  new="$(cmdline_overlay_enable "$cur")"
+  if [[ "$new" != "$cur" ]]; then
+    say "rewrite the overlay token in $cmdline to $OVERLAY_TOKEN (keeps $DATA out of the overlay)"
+    set_cmdline_first_line "$cmdline" "$new"
+  fi
+  IFS= read -r cur < "$cmdline" || true
+  if cmdline_overlay_ok "$cur"; then
+    say "ok: the overlay filesystem ($OVERLAY_TOKEN) is enabled from the next boot"
   else
-    die "raspi-config did not add overlayroot=tmpfs to /boot/firmware/cmdline.txt"
+    die "$cmdline does not contain exactly one $OVERLAY_TOKEN token after enabling the overlay; refusing to continue (run with --writable to undo)"
   fi
 }
 
@@ -1026,8 +1171,11 @@ summary() {
   printf '\nDone%s.\n' "$([[ $DRY -eq 1 ]] && echo ' (dry run: nothing was changed)')"
   say "Frame: $NAME   admin page: http://$NAME.local:3000/ (or its Tailscale name)"
   say "SSH:   ssh $INSTALL_USER@$NAME.local (key only), also over Tailscale once shared"
-  say "Before giving the frame away, delete your own WiFi profile so it does not ship:"
-  say "  nmcli -t -f NAME,TYPE connection show   then   sudo nmcli connection delete '<name>'"
+  say "Before giving the frame away, remove your own traces (they live on $DATA, which survives"
+  say "the overlay, so these deletions are permanent):"
+  say "  WiFi:      nmcli -t -f NAME,TYPE connection show   then   sudo nmcli connection delete '<name>'"
+  say "  Tailscale: sudo tailscale logout   (only if you logged the frame in yourself)"
+  say "  test photos: delete them on the admin page (they are stored in $DATA/uploads)"
   if [[ $DRY -eq 0 ]]; then
     say "Reboot now to start the kiosk: sudo reboot   (the installer never reboots by itself)"
   else
