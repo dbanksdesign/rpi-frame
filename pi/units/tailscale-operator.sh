@@ -30,15 +30,35 @@ if ! command -v tailscale > /dev/null 2>&1; then
   exit 0
 fi
 
+# with_timeout <seconds> <cmd...>: a hung tailscaled must not hold up the
+# server start (systemd would fail the start after TimeoutStartSec).
+with_timeout() {
+  local secs=$1 pid w rc=0
+  shift
+  if command -v timeout > /dev/null 2>&1; then timeout "$secs" "$@"; return; fi
+  "$@" &
+  pid=$!
+  (
+    sleep "$secs"
+    kill "$pid" 2> /dev/null
+  ) > /dev/null 2>&1 &
+  w=$!
+  wait "$pid" || rc=$?
+  kill "$w" 2> /dev/null || true
+  return "$rc"
+}
+
 # `tailscale set` fails until tailscaled's socket answers, so retrying it is
 # the readiness poll (`tailscale status` exits non-zero while logged out).
+# Bounded by both a try count and the elapsed time.
 i=0
+start=$SECONDS
 while :; do
-  if tailscale set "--operator=$OPERATOR" > /dev/null 2>&1; then
+  if with_timeout 3 tailscale set "--operator=$OPERATOR" > /dev/null 2>&1; then
     log "operator is $OPERATOR"
     exit 0
   fi
-  if [[ $i -ge $WAIT ]]; then break; fi
+  if [[ $i -ge $WAIT || $((SECONDS - start)) -ge $WAIT ]]; then break; fi
   sleep 1
   i=$((i + 1))
 done

@@ -412,8 +412,7 @@ n="$(cat "$OP_STATE/fails" 2> /dev/null || echo 0)"
 if [[ "$n" -gt 0 ]]; then echo $((n - 1)) > "$OP_STATE/fails"; echo "tskey-NOT-PRINTED" >&2; exit 1; fi
 exit 0
 STUB
-printf '#!/usr/bin/env bash\nexit 0\n' > "$OPB/sleep"
-chmod +x "$OPB/tailscale" "$OPB/sleep"
+chmod +x "$OPB/tailscale"
 run_op() { # <fails> [env...]
   OP_STATE="$(mktemp -d "$ROOT/op.XXXXXX")"
   echo "$1" > "$OP_STATE/fails"
@@ -428,10 +427,10 @@ assert_eq "$OPCALLS" "set --operator=frame" "operator helper sets the operator o
 run_op 3
 assert_eq "$RC" 0 "operator helper exit (daemon slow)"
 assert_eq "$(printf '%s\n' "$OPCALLS" | grep -c -x 'set --operator=frame')" 4 "operator helper retries until tailscaled answers"
-run_op 1000
+run_op 1000 FRAME_TAILSCALE_WAIT=3
 assert_eq "$RC" 0 "operator helper never fails the unit"
 n_calls="$(printf '%s\n' "$OPCALLS" | grep -c .)"
-if [[ "$n_calls" -ge 10 && "$n_calls" -le 20 ]]; then ok; else bad "operator helper gives up after ~15 tries (got $n_calls)"; fi
+if [[ "$n_calls" -ge 2 && "$n_calls" -le 5 ]]; then ok; else bad "operator helper gives up after FRAME_TAILSCALE_WAIT (3) tries (got $n_calls)"; fi
 assert_not_contains "$OUT" "tskey-NOT-PRINTED" "operator helper prints no tailscale output"
 run_op 0 FRAME_TAILSCALE_OPERATOR=tester
 assert_eq "$OPCALLS" "set --operator=tester" "operator name overridable for tests"
@@ -440,6 +439,17 @@ assert_eq "$OPCALLS" "" "bad operator name refused"
 assert_eq "$RC" 0 "bad operator name still exits 0"
 OUT="$(env PATH="/nonexistent" /bin/bash "$OPH" 2>&1)"
 assert_eq "$?" 0 "operator helper exits 0 without tailscale"
+# a hung tailscaled: each call is bounded and the whole helper stays well under
+# systemd's start timeout (real sleep here, so FRAME_TAILSCALE_WAIT keeps it short)
+OPH_HUNG="$ROOT/ophung"
+mkdir -p "$OPH_HUNG"
+printf '#!/usr/bin/env bash\nexec sleep 30\n' > "$OPH_HUNG/tailscale"
+chmod +x "$OPH_HUNG/tailscale"
+t0=$SECONDS
+OUT="$(env PATH="$OPH_HUNG:/usr/bin:/bin" FRAME_TAILSCALE_WAIT=2 bash "$OPH" 2>&1)"
+rc=$?
+assert_eq "$rc" 0 "operator helper exits 0 with a hung tailscaled"
+if [[ $((SECONDS - t0)) -le 12 ]]; then ok; else bad "operator helper blocked $((SECONDS - t0)) s on a hung tailscaled"; fi
 
 # ---- 9. scripts parse -----------------------------------------------------------
 for s in "$INSTALL" "$PI/power-log.sh" "$OPH"; do
