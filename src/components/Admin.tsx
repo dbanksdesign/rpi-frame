@@ -26,6 +26,7 @@ import {
 } from '@mantine/core'
 import { IconUpload, IconEye, IconEyeOff, IconTrash, IconPhoto, IconPlayerPlay, IconClock, IconFolder, IconFolderPlus } from '@tabler/icons-react'
 import { useWebSocket } from '../context/WebSocketContext'
+import UpdatePanel from './UpdatePanel'
 import './Admin.css'
 
 type TimeUnit = 'seconds' | 'minutes' | 'hours'
@@ -389,6 +390,8 @@ function Admin() {
           </Group>
         )}
       </Paper>
+
+      <UpdatePanel />
 
       <Group justify="space-between" mb="md">
         <Title order={3}>Photos</Title>

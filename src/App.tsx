@@ -8,6 +8,7 @@ import Slideshow from './components/Slideshow'
 import Admin from './components/Admin'
 import Setup from './components/Setup'
 import { useSetupState } from './setup/useSetupState'
+import { useVersionReload } from './update/useVersionReload'
 import ErrorBoundary from './components/ErrorBoundary'
 import './App.css'
 
@@ -159,6 +160,7 @@ function AppContent() {
   const isSlideshow = location.pathname === '/slideshow'
   const [displayOn, setDisplayOn] = useState(true)
   const setup = useSetupState()
+  useVersionReload()
 
   // Fetch display status once on mount
   useEffect(() => {
