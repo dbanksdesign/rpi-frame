@@ -3,6 +3,13 @@ import type { SetupService } from './setupService';
 import { isSetupActive, parseWifiRequest, SETUP_INACTIVE } from './wifiRequest';
 
 const GATEWAY_URL = 'http://10.42.0.1/';
+const GATEWAY_HOST = new URL(GATEWAY_URL).hostname;
+
+/** The request's Host header names the gateway (any :port, any case). */
+function isGatewayHost(req: express.Request): boolean {
+  const host = req.headers.host;
+  return typeof host === 'string' && host.replace(/:\d*$/, '').toLowerCase() === GATEWAY_HOST;
+}
 
 // SSIDs are attacker-controlled: the page only ever inserts them via DOM
 // properties (textContent / option.value), never as HTML.
@@ -87,8 +94,15 @@ export function createPortalMiddleware(service: SetupService): express.Router {
     service.notePortalActivity();
     next();
   };
+  // The page itself counts only on the gateway address, where the redirect sends
+  // a person: captive DNS resolves every name to the frame, so background apps
+  // can ask for / under any Host. The page is still served for every Host.
+  const notePageActivity: express.RequestHandler = (req, _res, next) => {
+    if (isGatewayHost(req)) service.notePortalActivity();
+    next();
+  };
 
-  router.get('/', noteActivity, (_req, res) => {
+  router.get('/', notePageActivity, (_req, res) => {
     res.type('html').send(PAGE);
   });
 

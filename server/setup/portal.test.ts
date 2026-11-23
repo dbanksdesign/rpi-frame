@@ -1,5 +1,6 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import express from 'express';
+import net from 'net';
 import type { Server } from 'http';
 import type { AddressInfo } from 'net';
 import { createPortalMiddleware } from './portal';
@@ -41,6 +42,27 @@ async function boot(service = fakeService()) {
 }
 
 const json = { 'content-type': 'application/json' };
+
+/**
+ * GET with an explicit Host header (fetch cannot set one). null sends an HTTP/1.0
+ * request with no Host header at all (Node answers 400 to HTTP/1.1 without one).
+ */
+function getWithHost(base: string, path: string, host: string | null): Promise<{ status: number; body: string }> {
+  const u = new URL(base);
+  return new Promise((resolve, reject) => {
+    const sock = net.connect(Number(u.port), u.hostname, () => {
+      sock.write(host === null ? `GET ${path} HTTP/1.0\r\n\r\n` : `GET ${path} HTTP/1.1\r\nHost: ${host}\r\nConnection: close\r\n\r\n`);
+    });
+    let raw = '';
+    sock.setEncoding('utf8');
+    sock.on('data', (c) => (raw += c));
+    sock.on('error', reject);
+    sock.on('end', () => {
+      const status = Number(/^HTTP\/1\.[01] (\d{3})/.exec(raw)?.[1] ?? 0);
+      resolve({ status, body: raw.slice(raw.indexOf('\r\n\r\n') + 4) });
+    });
+  });
+}
 
 describe('portal', () => {
   it('redirects probe URLs and unknown paths to the gateway', async () => {
@@ -154,7 +176,21 @@ describe('portal', () => {
     }
     await fetch(base + '/wifi', { redirect: 'manual' }); // GET /wifi is not the form submit
     expect(noted).not.toHaveBeenCalled();
+    // the setup page counts only when asked for on the gateway address
+    for (const host of ['example.com', 'captive.apple.com', 'EXAMPLE.com:80', '10.42.0.10', '127.0.0.1', null]) {
+      const res = await getWithHost(base, '/', host);
+      expect(res.status).toBe(200); // still served, as before
+      expect(res.body).toContain('<form');
+    }
+    await fetch(base + '/'); // Host 127.0.0.1:<port>
+    expect(noted).not.toHaveBeenCalled();
+    expect((await getWithHost(base, '/', '10.42.0.1')).body).toContain('<form');
+    expect(noted).toHaveBeenCalledTimes(1);
+    await getWithHost(base, '/', '10.42.0.1:80');
+    expect(noted).toHaveBeenCalledTimes(2);
+    noted.mockClear();
     await fetch(base + '/');
+    await getWithHost(base, '/', '10.42.0.1');
     expect(noted).toHaveBeenCalledTimes(1);
     await fetch(base + '/networks');
     expect(noted).toHaveBeenCalledTimes(2);

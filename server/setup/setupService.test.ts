@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import express from 'express';
+import net from 'net';
 import type { Server } from 'http';
 import type { AddressInfo } from 'net';
 import { createSetupService, type SetupService } from './setupService';
@@ -498,8 +499,29 @@ describe('setupService', () => {
       return `http://127.0.0.1:${(srv.address() as AddressInfo).port}`;
     }
     const json = { 'content-type': 'application/json' };
-    const requests: Record<string, (base: string) => Promise<Response>> = {
-      'GET /': (b) => fetch(b + '/'),
+    /**
+     * GET with an explicit Host header (fetch cannot set one). null sends an HTTP/1.0
+     * request with no Host header at all (Node answers 400 to HTTP/1.1 without one).
+     */
+    function getWithHost(base: string, path: string, host: string | null): Promise<{ status: number; body: string }> {
+      const u = new URL(base);
+      return new Promise((resolve, reject) => {
+        const sock = net.connect(Number(u.port), u.hostname, () => {
+          sock.write(host === null ? `GET ${path} HTTP/1.0\r\n\r\n` : `GET ${path} HTTP/1.1\r\nHost: ${host}\r\nConnection: close\r\n\r\n`);
+        });
+        let raw = '';
+        sock.setEncoding('utf8');
+        sock.on('data', (c) => (raw += c));
+        sock.on('error', reject);
+        sock.on('end', () => {
+          const status = Number(/^HTTP\/1\.[01] (\d{3})/.exec(raw)?.[1] ?? 0);
+          resolve({ status, body: raw.slice(raw.indexOf('\r\n\r\n') + 4) });
+        });
+      });
+    }
+    const requests: Record<string, (base: string) => Promise<{ status: number }>> = {
+      'GET / (Host 10.42.0.1)': (b) => getWithHost(b, '/', '10.42.0.1'),
+      'GET / (Host 10.42.0.1:80)': (b) => getWithHost(b, '/', '10.42.0.1:80'),
       'GET /networks': (b) => fetch(b + '/networks'),
       'POST /wifi (invalid)': (b) => fetch(b + '/wifi', { method: 'POST', headers: json, body: JSON.stringify({ ssid: '' }) }),
       'POST /wifi (malformed)': (b) => fetch(b + '/wifi', { method: 'POST', headers: json, body: '{"ssid":' }),
@@ -528,6 +550,25 @@ describe('setupService', () => {
       });
     }
 
+    it('GET / under any other Host (or none) does NOT postpone the retry', async () => {
+      const s = setup({ savedGrace: 0 });
+      s.f.saved = true;
+      const base = await portal(s.service);
+      s.service.start();
+      await s.tick();
+      for (let i = 0; i < 9; i++) {
+        await s.advance(30_000);
+        for (const host of ['example.com', 'captive.apple.com', null]) {
+          expect((await getWithHost(base, '/', host)).status).toBe(200);
+        }
+        expect((await fetch(base + '/')).status).toBe(200);
+      }
+      expect(s.wifi.stopHotspot).not.toHaveBeenCalled(); // 4:31: the page was served all along
+      await s.advance(31_000);
+      expect(s.wifi.stopHotspot).toHaveBeenCalledTimes(1); // the retry, on time
+      s.service.stop();
+    });
+
     it('captive-portal probes and unknown paths do NOT postpone the retry', async () => {
       const s = setup({ savedGrace: 0 });
       s.f.saved = true;
@@ -553,7 +594,7 @@ describe('setupService', () => {
       await s.tick();
       const firstPw = s.service.getState().hotspot!.password;
       await s.advance(4 * 60_000 + 50_000);
-      await fetch(base + '/');
+      await getWithHost(base, '/', '10.42.0.1');
       s.f.wifiUp = true; // the session ends
       await s.advance(2_000);
       expect(s.service.isHotspotUp()).toBe(false);
