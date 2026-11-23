@@ -22,8 +22,9 @@ done
 echo "Server is ready! Waiting 5 more seconds..."
 sleep 5
 
-# Launch browser in kiosk mode with additional flags
-DISPLAY=:0 chromium-browser \
+# Launch browser in kiosk mode. exec keeps Chromium as the service's main
+# process so systemd doesn't see the script exit and restart it every 15s.
+DISPLAY=:0 exec chromium-browser \
   --kiosk \
   --start-fullscreen \
   --app=http://localhost:3000/slideshow \
@@ -37,6 +38,4 @@ DISPLAY=:0 chromium-browser \
   --disable-features=TranslateUI \
   --disable-restore-session-state \
   --password-store=basic \
-  --incognito &
-
-echo "Browser launched!"
+  --incognito

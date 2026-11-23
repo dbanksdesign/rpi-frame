@@ -1,0 +1,23 @@
+[Unit]
+Description=Digital Photo Frame Display Client
+After=network.target photo-frame-server.service graphical.target
+Wants=photo-frame-server.service
+# These belong in [Unit]; in [Service] systemd ignores them.
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=djb
+WorkingDirectory=/home/djb/dev/rpi-frame
+Environment=DISPLAY=:0
+Environment=WAYLAND_DISPLAY=wayland-1
+Environment=XDG_RUNTIME_DIR=/run/user/1000
+ExecStart=/home/djb/dev/rpi-frame/start.sh
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=graphical.target
