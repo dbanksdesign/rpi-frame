@@ -16,7 +16,8 @@ are in `pi/README.md` and the scripts it names.
   says "verify" is one where the exact command or output could not be confirmed off-device.
 - Needed: an SSH key pair (the owner key, `~/owner.pub`), a phone (iPhone and Android if you can),
   a laptop, a keyboard for the Pi, an Ethernet cable (used to keep a session when WiFi is
-  removed), two Tailscale accounts (the "brother" tailnet and the owner's), the router's admin
+  removed; unplug it whenever a step needs the setup screen, because a cable counts as online),
+  two Tailscale accounts (the "brother" tailnet and the owner's), the router's admin
   page, and the repo cloned on the Pi.
 - In this document `<user>` is the login user who ran the installer, `<tag>` a release such as
   `v0.1.0`, and `photoframe` the default hostname.
@@ -70,6 +71,9 @@ also in RAM, everything is lost at the next power cut. The installer sets
   line says to reboot; the installer never reboots by itself.
 - [ ] No `WARNING` about a kept WiFi or Tailscale file. If there is one, delete that file by hand.
 - [ ] `lsblk -f` shows an ext4 partition labelled `FRAMEDATA`.
+- [ ] `ls -l /boot/firmware/cmdline.txt.photo-frame.orig` exists and `head -1` of it is the
+  original command line (no `overlayroot=` token, has `root=`). It is the installer's backup from
+  before its first change to `cmdline.txt` (step 14) and is never overwritten by a re-run.
 - [ ] Re-run the same command. It finishes again without errors and without a second partition
   (idempotent). Fail: `pi/install.sh`, functions `step_data_partition` and `create_partition`.
 
@@ -94,16 +98,19 @@ also in RAM, everything is lost at the next power cut. The installer sets
   `/etc/NetworkManager/system-connections/acceptance-test.txt` **exist**. `/etc/acceptance-root-test.txt`
   **does not** (the root really is in RAM). Remove the first two with `sudo rm`.
 - [ ] `systemctl --failed` is empty. `systemctl list-units --type=mount | grep -i fail` is empty.
-- [ ] `./pi/install.sh --owner-key ~/owner.pub --writable`, `sudo reboot`: `/proc/cmdline` has no
-  `overlayroot=` token and `echo x | sudo tee /etc/writable-test` still exists after another
-  reboot. Remove it. Then re-run `./pi/install.sh --owner-key ~/owner.pub` and `sudo reboot` to
-  turn the overlay back on (README, "Maintaining a frame"). A normal run with the overlay on
-  must **refuse** (preflight): confirm that message once.
+- [ ] Round trip **with the installer, never the raspi-config menu** (its disable does not match
+  the `recurse=0` token): `sudo ./pi/install.sh --owner-key ~/owner.pub --writable`, `sudo reboot`:
+  `/proc/cmdline` has no `overlayroot=` token and `echo x | sudo tee /etc/writable-test` still
+  exists after another reboot. Remove it. Then re-run `./pi/install.sh --owner-key ~/owner.pub`
+  and `sudo reboot` to turn the overlay back on (README, "Maintaining a frame"): `/proc/cmdline`
+  has `overlayroot=tmpfs:recurse=0` exactly once again. A normal run with the overlay on must
+  **refuse** (preflight): confirm that message once.
 
 > **If this fails:** `/data` shows `overlay` or the files vanish: `pi/install.sh`,
 > `cmdline_overlay_enable` and `step_overlay`; `/boot/firmware/cmdline.txt` (first line);
 > `raspi-config nonint enable_overlayfs` (verify what it wrote). To get the card writable again,
-> edit `/boot/firmware/cmdline.txt` on another machine and remove `overlayroot=tmpfs...`.
+> edit `/boot/firmware/cmdline.txt` on another machine and remove `overlayroot=tmpfs...` (or copy
+> `cmdline.txt.photo-frame.orig` over it).
 
 ### 1.4 Boot ordering after a power cut
 
@@ -146,12 +153,20 @@ come back here after it).
 - [ ] On the LCD, after boot, with nothing touched: Chromium shows the slideshow (or the setup
   screen) full screen. **No** desktop panel, wallpaper, taskbar or mouse cursor appears (move a
   mouse over it: the cursor hides within a second).
-- [ ] `sudo -u frame env DISPLAY=:0 xset q | grep -iE 'timeout|DPMS|Monitor'`: screen saver
+- [ ] `sudo -u frame env DISPLAY=:0 XAUTHORITY=/home/frame/.Xauthority xset q | grep -iE 'timeout|DPMS|Monitor'`: screen saver
   `timeout: 0` and DPMS timeouts all 0 (verify the auth works; otherwise read it from a keyboard
   session). Leave the frame an hour and confirm the screen never blanks.
 - [ ] `loginctl list-sessions` shows `frame` in an X11 session; `cat /etc/lightdm/lightdm.conf.d/50-photo-frame.conf`
   names `LXDE-pi-x`. `pgrep -a unclutter` and `pgrep -a chromium | head -1` show them running.
 - [ ] Kill Chromium (`sudo pkill chromium`): it comes back within about 10 s (`start.sh` loops).
+- [ ] **Display Off/On** (verify on hardware): on the admin page press the monitor button in the
+  header ("Turn display off", green). The LCD goes dark, no "Failed to toggle display" alert
+  appears, the button turns red, and
+  `sudo -u frame env DISPLAY=:0 XAUTHORITY=/home/frame/.Xauthority xset q | grep -i monitor`
+  says "Monitor is Off". Press it again ("Turn display on"): the picture returns and `xset q`
+  says "Monitor is On". Reload the admin page: the button colour still matches. A 500 / alert here means the server
+  cannot read the X cookie: check `ProtectHome=read-only` and `XAUTHORITY` in
+  `pi/units/photo-frame-server.service` and that `/home/frame/.Xauthority` exists.
 - [ ] Open the admin page from a phone (`http://photoframe.local`) and upload a **large** JPEG
   (more than 3000 px wide). It appears and shows on the frame.
 - [ ] `identify -format '%wx%h\n' /data/uploads/<newest file>` (or `file`) reports at most 1920 px
@@ -203,12 +218,16 @@ come back here after it).
 
 ## 4. WiFi setup hotspot
 
-Re-trigger the setup screen without a handoff (SPARE PI ONLY): connect Ethernet or use a keyboard,
-note the saved WiFi's name with `nmcli -t -f NAME,TYPE connection show`, then
+Re-trigger the setup screen without a handoff (SPARE PI ONLY): use a keyboard (or Ethernet only to
+type the commands; unplug the cable before the restart), note the saved WiFi's name with `nmcli -t -f NAME,TYPE connection show`, then
 `sudo nmcli connection delete "<that name>"` **and** `sudo systemctl restart photo-frame-server`
 (or reboot). Deleting the profile alone is not enough: a frame that is already running with photos
 stays on the slideshow with the "No WiFi" label for 30 minutes. After the restart the setup phase
-starts at "no WiFi" and the hotspot appears about 60 seconds later.
+starts at "no WiFi" and the hotspot appears about 60 seconds later. (That needs **no** other saved
+WiFi profile: with one left, a frame with photos stays on the slideshow for 30 minutes, and one
+without photos waits 5 minutes and then drops the hotspot every 5 minutes to retry it; see
+section 6. With the Ethernet cable still in, no setup screen appears at all: a cable counts as
+online.)
 
 - [ ] The LCD shows "Welcome to your photo frame", the network `PhotoFrame-Setup`, a password
   and a QR code, and "A setup page opens automatically (or open http://10.42.0.1)".
@@ -232,6 +251,12 @@ starts at "no WiFi" and the hotspot appears about 60 seconds later.
   `journalctl -u photo-frame-server -b`.
 - [ ] **Hidden SSID:** hide the SSID in the router (or use a second hidden network), submit it
   with the "Hidden network" box ticked. It joins. Unhide the SSID afterwards.
+- [ ] **Ethernet fallback:** re-trigger the setup screen (above), and while the hotspot is up plug
+  in an Ethernet cable to the router. Within a few seconds the setup screen moves on (Tailscale
+  screen, or the slideshow if Tailscale is logged in), `nmcli -t -f DEVICE,TYPE,STATE,CONNECTION device`
+  no longer shows `Hotspot` connected, and from a laptop on the LAN
+  `curl -s http://photoframe.local/api/setup/state` contains no `"hotspot"` / password. Reboot
+  with the cable in and no WiFi profile: the hotspot never starts.
 - [ ] Ready card (`You're all set`): shows `http://photoframe.local`, `http://<LAN IP>` and, if
   Tailscale is up, `http://<tailnet name>`. The QR opens the **LAN IP** page. Tapping the card
   or waiting 60 s goes to the slideshow.
@@ -253,6 +278,16 @@ starts at "no WiFi" and the hotspot appears about 60 seconds later.
 - [ ] While the hotspot is up (re-trigger it as in section 4): `curl -sI http://10.42.0.1/` from a
   laptop joined to the `PhotoFrame-Setup` network redirects to the setup page, while on the Pi `curl -sI http://localhost:3000/` still
   returns `200` and the kiosk keeps running.
+- [ ] **WiFi cannot be changed outside setup:** with the frame in the normal state (slideshow),
+  from a laptop on the LAN run
+  `curl -i -X POST -H 'Content-Type: application/json' -d '{"ssid":"test","password":"12345678"}' http://photoframe.local/api/setup/wifi`
+  and the same against `http://photoframe.local:3000/api/setup/wifi`, plus
+  `curl -i http://photoframe.local/api/setup/networks`. Each answers `HTTP/1.1 409` with
+  `{"error":"Setup is not active"}`, and the frame stays on its WiFi (`nmcli connection show
+  --active` unchanged, no new `test` profile).
+- [ ] Right after `sudo systemctl restart photo-frame-server`, `curl -si http://localhost:3000/api/setup/state`
+  answers `503` with `{"error":"starting"}` for the first moment, then `200`; the kiosk does not
+  flash the setup screen during the restart.
 - [ ] Port-80 bind fallback (SPARE PI ONLY): `sudo systemctl stop photo-frame-server`, then in a
   second session `sudo python3 -m http.server 80`, then `sudo systemctl start photo-frame-server`.
   `journalctl -u photo-frame-server -b | tail` shows "Could not listen on port 80 ... admin stays
@@ -267,21 +302,36 @@ starts at "no WiFi" and the hotspot appears about 60 seconds later.
 ## 6. WiFi loss behaviour
 
 - [ ] **Startup grace:** with a saved WiFi, `sudo reboot` and watch the LCD from the first frame
-  of the page: the `PhotoFrame-Setup` screen must **not** appear (grace is 60 s).
+  of the page: the `PhotoFrame-Setup` screen must **not** appear (with photos the frame starts on
+  the slideshow, possibly with the "No WiFi" label until WiFi joins; without photos the grace is
+  5 minutes when a WiFi profile is saved, 60 s when none is).
+- [ ] **Power cut while the router is down** (the whole-house case; SPARE PI ONLY): photos
+  present, WiFi saved. Switch the router off, pull the Pi's power, plug the Pi back in and keep
+  the router off for **5 minutes**: the slideshow runs with the "No WiFi" label and no setup
+  screen. Switch the router on and time it: the frame rejoins (label gone, admin page reachable)
+  within about **6 minutes** of the router coming back, and the `PhotoFrame-Setup` hotspot does
+  not stay up. Repeat once **without photos** (delete them first): the setup screen may appear
+  after 5 minutes, but within about 6 minutes of the router coming back the frame leaves it by
+  itself (`journalctl -u photo-frame-server -b | grep 'retrying the saved WiFi'` shows the
+  retries, one line each).
 - [ ] **Short outage (< 30 min), photos present:** switch the router off (or move the frame out of
   range). The slideshow keeps going with a small bottom-right label
   "No WiFi — showing saved photos". Switch the router on: the label disappears within a minute
   and the frame is reachable again.
 - [ ] **Reboot the router** (the real-life case) while the frame runs: same result.
 - [ ] **Long outage (≥ 30 min):** keep the router off for 35 minutes. The `PhotoFrame-Setup`
-  screen and hotspot appear. Switch the router on while the hotspot is up: record whether the
-  frame goes back to the slideshow by itself or needs the setup page (note it; the saved profile is
-  still used for retries).
+  screen and hotspot appear. Switch the router on while the hotspot is up: within about
+  6 minutes the frame drops the hotspot (every 5 minutes, for up to 45 s), rejoins the saved
+  WiFi and goes back to the slideshow by itself. During each retry the hotspot is briefly gone;
+  when a retry fails it comes back with the **same** password as before.
 - [ ] The banner only shows if the frame was already in the normal state with photos. After
   deleting all photos, a router-off shows the setup screen sooner (expected).
 
 > **If this fails:** `server/setup/stateMachine.ts` (`WIFI_LOSS_MINUTES = 30`),
-> `server/setup/setupService.ts` (`DEFAULT_GRACE_MS`).
+> `server/setup/setupService.ts` (`DEFAULT_GRACE_MS`, `DEFAULT_SAVED_NETWORK_GRACE_MS`,
+> `DEFAULT_RETRY_EVERY_MS`, `DEFAULT_RETRY_WAIT_MS`), `server/setup/nmcli.ts` (`hasSavedNetwork`,
+> `isConnected`). If a failed setup attempt left a WiFi profile behind (`nmcli connection show`),
+> note it: such a profile also counts as "saved" (longer grace, hotspot retries).
 
 ---
 
@@ -441,8 +491,9 @@ SPARE PI ONLY (this wipes it). Run at a keyboard or over SSH on the **LAN**, nev
   (and a dropped session), because stopping it half-way would leave the frame half-wiped. Press
   Ctrl-C once anyway and confirm it keeps going. Watch it finish and power off. Output is also in
   `/run/prepare-handoff.log` while the Pi is up. Unplug only after the green LED stops flashing.
-- [ ] Boot the Pi again. It shows the WiFi setup screen, `PhotoFrame-Setup`, after about a minute.
-- [ ] Log in over Ethernet or the keyboard and check (as appropriate for the mode):
+- [ ] Boot the Pi again **without an Ethernet cable** (a cable counts as online, so no setup screen
+  would appear). It shows the WiFi setup screen, `PhotoFrame-Setup`, after about a minute.
+- [ ] Log in at the keyboard (or plug in Ethernet now, after seeing the setup screen) and check (as appropriate for the mode):
   `nmcli connection show` has no WiFi profile, `tailscale status` says logged out, `sudo ls /data/uploads`
   is empty (for `--clear-photos`) or still has the photos (for `--keep-photos`),
   `/data/update-status.json` is gone, `sudo journalctl --disk-usage` is small.
