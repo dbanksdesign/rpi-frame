@@ -67,6 +67,24 @@ describe('hotspot', () => {
     expect(calls[0].args).toEqual(['device', 'wifi', 'hotspot', 'ssid', 'Frame Setup', 'password', 'hunter22!']);
   });
 
+  it('passes hostile ssid/password as literals and never leaks the password on failure', async () => {
+    const ssid = 'My "Net"; $(reboot)';
+    const pw = 'p\'a ss"w;rd';
+    const err = Object.assign(new Error(`Command failed: nmcli device wifi hotspot ssid ${ssid} password ${pw}`), {
+      stderr: `Error: failed for ${pw}`,
+      cmd: `nmcli ... ${pw}`,
+    });
+    const { run, calls } = fakeRun([{ error: err }]);
+    const caught = await createWifiManager(run).startHotspot(ssid, pw).catch((e) => e);
+    expect(calls[0].args).toEqual(['device', 'wifi', 'hotspot', 'ssid', ssid, 'password', pw]);
+    expect(caught).toBeInstanceOf(Error);
+    expect(caught.message).not.toContain(pw);
+    expect(String(caught.stack)).not.toContain(pw);
+    expect(caught.stderr).toBeUndefined();
+    expect(caught.cmd).toBeUndefined();
+    expect(caught.cause).toBeUndefined();
+  });
+
   it('stops the hotspot and ignores errors', async () => {
     const { run, calls } = fakeRun([{ error: new Error('not active') }]);
     await expect(createWifiManager(run).stopHotspot()).resolves.toBeUndefined();

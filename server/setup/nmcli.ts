@@ -70,7 +70,12 @@ export function createWifiManager(run: Run): WifiManager {
     },
 
     async startHotspot(ssid, password) {
-      await run('nmcli', ['device', 'wifi', 'hotspot', 'ssid', ssid, 'password', password]);
+      try {
+        await run('nmcli', ['device', 'wifi', 'hotspot', 'ssid', ssid, 'password', password]);
+      } catch {
+        // Deliberately drop the underlying error (and its cause): it echoes the password.
+        throw new Error('Could not start the setup hotspot');
+      }
     },
 
     async stopHotspot() {
