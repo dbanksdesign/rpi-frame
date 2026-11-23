@@ -72,8 +72,12 @@ also in RAM, everything is lost at the next power cut. The installer sets
 - [ ] No `WARNING` about a kept WiFi or Tailscale file. If there is one, delete that file by hand.
 - [ ] `lsblk -f` shows an ext4 partition labelled `FRAMEDATA`.
 - [ ] `ls -l /boot/firmware/cmdline.txt.photo-frame.orig` exists and `head -1` of it is the
-  original command line (no `overlayroot=` token, has `root=`). It is the installer's backup from
-  before its first change to `cmdline.txt` (step 14) and is never overwritten by a re-run.
+  pre-overlay command line: no `overlayroot=` token, has `root=`, and otherwise the same as the
+  first line of `/boot/firmware/cmdline.txt` without its `overlayroot=tmpfs:recurse=0` token. It
+  is the installer's backup from before step 14 changed anything (before raspi-config adds its
+  token); restoring it boots writable with the overlay off. A re-run leaves it alone (a backup
+  with a token, from an earlier installer version, is cleaned and the old file kept as
+  `cmdline.txt.photo-frame.orig.old`).
 - [ ] Re-run the same command. It finishes again without errors and without a second partition
   (idempotent). Fail: `pi/install.sh`, functions `step_data_partition` and `create_partition`.
 
@@ -109,8 +113,10 @@ also in RAM, everything is lost at the next power cut. The installer sets
 > **If this fails:** `/data` shows `overlay` or the files vanish: `pi/install.sh`,
 > `cmdline_overlay_enable` and `step_overlay`; `/boot/firmware/cmdline.txt` (first line);
 > `raspi-config nonint enable_overlayfs` (verify what it wrote). To get the card writable again,
-> edit `/boot/firmware/cmdline.txt` on another machine and remove `overlayroot=tmpfs...` (or copy
-> `cmdline.txt.photo-frame.orig` over it).
+> use `sudo ./pi/install.sh --writable` and reboot. If you cannot log in, edit
+> `/boot/firmware/cmdline.txt` on another machine and remove every `overlayroot=tmpfs...` token,
+> or copy `cmdline.txt.photo-frame.orig` over it: that backup has no `overlayroot=` token, so the
+> frame boots writable with the overlay off (check its first line has `root=` first).
 
 ### 1.4 Boot ordering after a power cut
 

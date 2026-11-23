@@ -185,9 +185,16 @@ a new system package also needs `install.sh` to be re-run.
 menu.** The installer writes the token as `overlayroot=tmpfs:recurse=0`, and raspi-config's
 disable no longer matches that form, so the menu would leave the frame read-only.
 
-Before its first change to `/boot/firmware/cmdline.txt` the installer keeps the original as
-`cmdline.txt.photo-frame.orig` next to it (never overwritten). If a Pi ever fails to boot after
-an install, put the card in another machine and copy that file back over `cmdline.txt`.
+Before step 14 changes anything (before `raspi-config` adds its `overlayroot=tmpfs` token) the
+installer keeps the kernel command line as `cmdline.txt.photo-frame.orig` next to
+`/boot/firmware/cmdline.txt`. The backup never contains an `overlayroot=` token: it is the
+pre-overlay line, so restoring it boots the frame **writable, with the overlay off**. A re-run
+leaves a clean backup alone; a backup that still has a token (written by an earlier installer
+version, after raspi-config) is replaced by the same line without it, and the old file is kept
+once as `cmdline.txt.photo-frame.orig.old`. The normal way to turn the overlay off is still
+`sudo ./pi/install.sh --writable`. Only if a Pi fails to boot after an install, or you cannot log
+in to run that, put the card in another machine and copy `cmdline.txt.photo-frame.orig` over
+`cmdline.txt`; then boot, and re-run the installer to turn the overlay back on.
 
 ## Tests
 

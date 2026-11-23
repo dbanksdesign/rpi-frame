@@ -1093,36 +1093,89 @@ cmdline_line_ok() {
   return 1
 }
 
+# boot_rw_begin / boot_rw_end: remount the boot partition rw for a write only
+# if it is mounted ro right now, and back to ro afterwards. BOOT_WAS_RO holds
+# the state between the two calls.
+BOOT_WAS_RO=0
+boot_rw_begin() {
+  BOOT_WAS_RO=0
+  if findmnt -n -o OPTIONS "$1" 2> /dev/null | tr ',' '\n' | grep -x ro > /dev/null; then
+    BOOT_WAS_RO=1
+    run mount -o remount,rw "$1"
+  fi
+}
+boot_rw_end() {
+  if [[ $BOOT_WAS_RO -eq 1 ]]; then run mount -o remount,ro "$1" || warn "could not remount $1 read-only"; fi
+  BOOT_WAS_RO=0
+}
+
+# boot_write <src> <dest>: stage <src> next to <dest>, sync, rename into place,
+# sync (the boot partition is vfat: no chown/chmod/cp -p).
+boot_write() {
+  as_root cp "$1" "$2.photo-frame-new"
+  as_root sync
+  as_root mv -f "$2.photo-frame-new" "$2"
+  as_root sync
+}
+
+# backup_cmdline <file>: make sure <file>.photo-frame.orig exists and holds a
+# line that boots the Pi writable, i.e. with the overlay OFF: the current line
+# with every overlayroot=tmpfs[:...] token removed (other lines kept). A clean
+# existing backup is never touched. A backup that still has a token (the
+# previous installer took it after raspi-config had added one) is replaced by
+# its own line without the token, and kept once as <file>.photo-frame.orig.old.
+# Refuses (dies, nothing changed) if the result would be blank or lack root=.
+backup_cmdline() {
+  local file=$1 orig="$1.photo-frame.orig" src cur line tmp bdir
+  [[ -f "$file" ]] || die "$file does not exist; not touching the boot configuration"
+  src="$file"
+  if [[ -e "$orig" ]]; then
+    cur=""
+    IFS= read -r cur < "$orig" || true
+    if ! cmdline_has_overlay "$cur"; then return 0; fi
+    src="$orig"
+  fi
+  cur=""
+  IFS= read -r cur < "$src" || true
+  line="$(cmdline_overlay_strip "$cur")"
+  if ! cmdline_line_ok "$line"; then
+    die "refusing to write a kernel command line backup without root= to $orig (it could not boot the Pi); nothing was changed"
+  fi
+  bdir="$(boot_dir)"
+  tmp="$(mktemp)"
+  { printf '%s\n' "$line"; awk 'NR > 1' "$src"; } > "$tmp"
+  boot_rw_begin "$bdir"
+  if [[ "$src" == "$orig" ]]; then
+    if [[ ! -e "$orig.old" ]]; then boot_write "$orig" "$orig.old"; fi
+    say "backup: $orig had an overlayroot token; replaced by the same line without it (previous copy: $orig.old)"
+  else
+    say "backup: $orig (the command line without the overlay; restore it on another machine if the Pi does not boot)"
+  fi
+  boot_write "$tmp" "$orig"
+  rm -f "$tmp"
+  boot_rw_end "$bdir"
+}
+
 # set_cmdline_first_line <file> <line>: replace line 1 (the only line the
 # firmware reads), keep any others; temporarily remounts the boot partition
 # rw if it is mounted ro. This is the one write that can stop the Pi from
-# booting, so: the line must pass cmdline_line_ok, the first original is kept
-# as <file>.photo-frame.orig (never overwritten), the new file is staged and
-# renamed into place, and the vfat partition is synced before and after.
-# No chown/chmod/cp -p: it is vfat.
+# booting, so: the line must pass cmdline_line_ok, backup_cmdline keeps
+# <file>.photo-frame.orig (no overlay token, never overwritten once clean),
+# and the new file is staged, renamed into place and synced (boot_write).
 set_cmdline_first_line() {
-  local file=$1 line=$2 tmp bdir was_ro=0
+  local file=$1 line=$2 tmp bdir
   [[ -f "$file" ]] || die "$file does not exist; not touching the boot configuration"
   if ! cmdline_line_ok "$line"; then
     die "refusing to write a kernel command line without root= to $file (the Pi would not boot); nothing was changed"
   fi
+  backup_cmdline "$file"
   bdir="$(boot_dir)"
   tmp="$(mktemp)"
   { printf '%s\n' "$line"; awk 'NR > 1' "$file"; } > "$tmp"
-  if findmnt -n -o OPTIONS "$bdir" 2> /dev/null | tr ',' '\n' | grep -x ro > /dev/null; then
-    was_ro=1
-    run mount -o remount,rw "$bdir"
-  fi
-  if [[ ! -e "$file.photo-frame.orig" ]]; then
-    say "backup: $file.photo-frame.orig (restore it on another machine if the Pi does not boot)"
-    as_root cp "$file" "$file.photo-frame.orig"
-  fi
-  as_root cp "$tmp" "$file.photo-frame-new"
-  as_root sync
-  as_root mv -f "$file.photo-frame-new" "$file"
-  as_root sync
+  boot_rw_begin "$bdir"
+  boot_write "$tmp" "$file"
   rm -f "$tmp"
-  if [[ $was_ro -eq 1 ]]; then run mount -o remount,ro "$bdir" || warn "could not remount $bdir read-only"; fi
+  boot_rw_end "$bdir"
 }
 
 step_overlay() {
@@ -1163,6 +1216,9 @@ step_overlay() {
       return 0
     fi
     say "(only if $DATA is a separate mounted partition; otherwise it is NOT enabled)"
+    say "first back up /boot/firmware/cmdline.txt to cmdline.txt.photo-frame.orig"
+    say "  without any overlayroot token (it boots writable with the overlay off; a clean"
+    say "  backup is kept as is, one with a token is replaced and kept once as .orig.old)"
     say "(boot partition read-only: only if /etc/fstab does not already say so)"
     run raspi-config nonint enable_bootro
     run raspi-config nonint enable_overlayfs
@@ -1176,11 +1232,14 @@ step_overlay() {
     print_partition_howto
     return 0
   fi
+  cmdline="$(cmdline_path)"
+  [[ -f "$cmdline" ]] || die "$cmdline not found, so the overlay cannot be enabled safely; nothing was changed. Check the boot partition."
+  # Before raspi-config touches anything: its enable_overlayfs prefixes a token.
+  backup_cmdline "$cmdline"
   if ! boot_ro_configured; then
     run raspi-config nonint enable_bootro
   fi
   run raspi-config nonint enable_overlayfs
-  cmdline="$(cmdline_path)"
   IFS= read -r cur < "$cmdline" || true
   new="$(cmdline_overlay_enable "$cur")"
   if [[ "$new" != "$cur" ]]; then

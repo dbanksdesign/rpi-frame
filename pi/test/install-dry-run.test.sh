@@ -364,7 +364,9 @@ for badline in "" "   " "overlayroot=tmpfs:recurse=0 console=tty1 rootwait" "nor
   assert_eq "$(cat "$CMD/cmdline.txt")" "$before_cmd" "refused cmdline rewrite leaves the file alone [$badline]"
 done
 assert_eq "$(find "$CMD" -name '*.photo-frame-new' | wc -l | tr -d ' ')" 0 "no staged cmdline file left behind"
-if sed -n '/^set_cmdline_first_line() {/,/^}/p' "$INSTALL" | grep -qw sync; then ok; else bad "set_cmdline_first_line syncs the boot partition"; fi
+# both boot-file writers go through boot_write, which syncs before and after the rename
+if sed -n '/^boot_write() {/,/^}/p' "$INSTALL" | grep -c -w sync | grep -qx 2; then ok; else bad "boot_write syncs before and after the rename"; fi
+if sed -n '/^set_cmdline_first_line() {/,/^}/p' "$INSTALL" | grep -qw boot_write; then ok; else bad "set_cmdline_first_line syncs the boot partition (boot_write)"; fi
 # --writable with no cmdline file must fail, not report success
 OUT="$(bash -c 'source "$1"; R=$2; as_root() { "$@"; }; run() { :; }; cmdline_path() { echo "$R/missing/cmdline.txt"; }
   DRY=0; WRITABLE=1; step_overlay' _ "$INSTALL" "$ROOT" 2>&1)"
@@ -372,6 +374,156 @@ RC=$?
 if [[ "$RC" -ne 0 ]]; then ok; else bad "--writable with a missing cmdline.txt must fail"; fi
 assert_not_contains "$OUT" "ok: " "--writable with a missing cmdline.txt reports no success"
 assert_contains "$OUT" "cmdline" "--writable missing-file message names the file"
+
+# ---- 8c. follow-up: the .orig backup is the pre-overlay line ---------------------
+# backup_cmdline <file> must leave <file>.photo-frame.orig with a bootable line
+# and NO overlayroot= token (its purpose: boot writable with the overlay off).
+PI_LINE='console=serial0,115200 console=tty1 root=PARTUUID=ab12cd34-02 rootfstype=ext4 fsck.repair=yes rootwait cfg80211.ieee80211_regdom=GB'
+BK="$ROOT/bk"
+bk_reset() { rm -rf "$BK"; mkdir -p "$BK"; printf '%s\n' "$1" > "$BK/cmdline.txt"; }
+bkp() { # [findmnt options]: runs backup_cmdline on $BK/cmdline.txt; run() only records
+  OUT="$(bash -c 'source "$1"; B=$2; MNT=$3; as_root() { "$@"; }; run() { printf "RUN %s\n" "$*"; }
+    boot_dir() { printf "%s\n" "$B"; }; findmnt() { if [[ -n "$MNT" ]]; then printf "%s\n" "$MNT"; else return 1; fi; }
+    backup_cmdline "$B/cmdline.txt"' _ "$INSTALL" "$BK" "${1:-}" 2>&1)"
+  RC=$?
+}
+orig_of() { cat "$BK/cmdline.txt.photo-frame.orig" 2> /dev/null; }
+for variant in "overlayroot=tmpfs $PI_LINE" "overlayroot=tmpfs:recurse=0 $PI_LINE" \
+  "console=serial0,115200 overlayroot=tmpfs:recurse=0 console=tty1 root=PARTUUID=ab12cd34-02 rootfstype=ext4 fsck.repair=yes rootwait cfg80211.ieee80211_regdom=GB" "$PI_LINE"; do
+  bk_reset "$variant"
+  bkp
+  assert_eq "$RC" 0 "backup exit [$variant]"
+  assert_eq "$(orig_of)" "$PI_LINE" "backup is the line without any overlayroot token [$variant]"
+  assert_eq "$(cat "$BK/cmdline.txt")" "$variant" "backup leaves cmdline.txt alone [$variant]"
+  if [[ -e "$BK/cmdline.txt.photo-frame.orig.old" ]]; then bad "no .orig.old for a first backup [$variant]"; else ok; fi
+done
+# other lines are kept, as in the live file
+bk_reset "overlayroot=tmpfs $PI_LINE"
+printf '# second line kept\n' >> "$BK/cmdline.txt"
+bkp
+assert_eq "$(orig_of)" "$PI_LINE
+# second line kept" "backup keeps the other lines"
+# a clean existing backup is never touched
+bk_reset "overlayroot=tmpfs:recurse=0 $PI_LINE"
+printf 'console=tty1 root=PARTUUID=0ld-02 rootwait\n' > "$BK/cmdline.txt.photo-frame.orig"
+bkp
+assert_eq "$RC" 0 "clean existing backup: exit"
+assert_eq "$(orig_of)" "console=tty1 root=PARTUUID=0ld-02 rootwait" "clean existing backup left alone"
+if [[ -e "$BK/cmdline.txt.photo-frame.orig.old" ]]; then bad "clean backup: no .orig.old"; else ok; fi
+# a polluted backup (written by the previous installer, after raspi-config) is
+# replaced by its own stripped line; the old file is kept once as .orig.old
+bk_reset "overlayroot=tmpfs:recurse=0 $PI_LINE"
+printf 'overlayroot=tmpfs console=tty1 root=PARTUUID=0ld-02 rootwait\n# kept\n' > "$BK/cmdline.txt.photo-frame.orig"
+bkp
+assert_eq "$RC" 0 "polluted backup: exit"
+assert_eq "$(orig_of)" "console=tty1 root=PARTUUID=0ld-02 rootwait
+# kept" "polluted backup replaced by its own line without the token"
+assert_eq "$(cat "$BK/cmdline.txt.photo-frame.orig.old" 2> /dev/null)" "overlayroot=tmpfs console=tty1 root=PARTUUID=0ld-02 rootwait
+# kept" "polluted backup kept as .orig.old"
+assert_contains "$OUT" "photo-frame.orig" "polluted backup: the run says what it did"
+bkp
+assert_eq "$RC" 0 "polluted backup, second run: exit"
+assert_eq "$(orig_of)" "console=tty1 root=PARTUUID=0ld-02 rootwait
+# kept" "second run: backup unchanged"
+assert_eq "$(cat "$BK/cmdline.txt.photo-frame.orig.old" 2> /dev/null)" "overlayroot=tmpfs console=tty1 root=PARTUUID=0ld-02 rootwait
+# kept" "second run: .orig.old unchanged"
+assert_eq "$(find "$BK" -name '*.photo-frame-new' | wc -l | tr -d ' ')" 0 "no staged backup file left behind"
+# refusals: nonzero, nothing changed
+for badline in "" "   " "overlayroot=tmpfs" "overlayroot=tmpfs:recurse=0 console=tty1 rootwait"; do
+  bk_reset "$badline"
+  bkp
+  if [[ "$RC" -ne 0 ]]; then ok; else bad "backup must refuse [$badline]"; fi
+  if [[ -e "$BK/cmdline.txt.photo-frame.orig" ]]; then bad "refused backup must not create .orig [$badline]"; else ok; fi
+  assert_eq "$(cat "$BK/cmdline.txt")" "$badline" "refused backup leaves cmdline.txt alone [$badline]"
+  assert_not_contains "$OUT" "RUN mount" "refused backup does not remount [$badline]"
+done
+bk_reset "overlayroot=tmpfs:recurse=0 $PI_LINE"
+printf 'overlayroot=tmpfs console=tty1 rootwait\n' > "$BK/cmdline.txt.photo-frame.orig"
+bkp
+if [[ "$RC" -ne 0 ]]; then ok; else bad "backup must refuse a polluted .orig without root="; fi
+assert_eq "$(orig_of)" "overlayroot=tmpfs console=tty1 rootwait" "refused: polluted .orig unchanged"
+if [[ -e "$BK/cmdline.txt.photo-frame.orig.old" ]]; then bad "refused: no .orig.old"; else ok; fi
+bk_reset "$PI_LINE"
+rm -f "$BK/cmdline.txt"
+bkp
+if [[ "$RC" -ne 0 ]]; then ok; else bad "backup must refuse a missing cmdline.txt"; fi
+# boot partition mounted ro: remount rw for the write, then ro again; rw: no remount
+bk_reset "overlayroot=tmpfs $PI_LINE"
+bkp "ro,relatime,fmask=0022"
+assert_eq "$(printf '%s\n' "$OUT" | grep '^RUN mount' | tr '\n' '|')" "RUN mount -o remount,rw $BK|RUN mount -o remount,ro $BK|" "ro boot partition: remount rw, then ro"
+assert_eq "$(orig_of)" "$PI_LINE" "ro boot partition: backup written"
+bk_reset "overlayroot=tmpfs $PI_LINE"
+bkp "rw,relatime"
+assert_not_contains "$OUT" "RUN mount" "rw boot partition: no remount"
+if sed -n '/^backup_cmdline() {/,/^}/p' "$INSTALL" | grep -qw boot_write; then ok; else bad "backup_cmdline syncs the boot partition (boot_write)"; fi
+if sed -n '/^set_cmdline_first_line() {/,/^}/p' "$INSTALL" | grep -qw backup_cmdline; then ok; else bad "set_cmdline_first_line uses backup_cmdline (one place)"; fi
+# the rewrite helper also cleans a polluted backup (e.g. --writable on a frame
+# installed by the previous version)
+bk_reset "overlayroot=tmpfs:recurse=0 $PI_LINE"
+printf 'overlayroot=tmpfs %s\n' "$PI_LINE" > "$BK/cmdline.txt.photo-frame.orig"
+OUT="$(bash -c 'source "$1"; B=$2; as_root() { "$@"; }; run() { "$@"; }; boot_dir() { printf "%s\n" "$B"; }; findmnt() { return 1; }
+  set_cmdline_first_line "$B/cmdline.txt" "$3"' _ "$INSTALL" "$BK" "$PI_LINE" 2>&1)"
+assert_eq "$?" 0 "rewrite with a polluted backup: exit"
+assert_eq "$(orig_of)" "$PI_LINE" "rewrite helper cleans a polluted backup"
+assert_eq "$(cat "$BK/cmdline.txt")" "$PI_LINE" "rewrite helper still writes the new line"
+
+# step_overlay for real against a temp boot dir: a raspi-config stub records
+# whether the backup already existed (and was clean) when it ran, and mimics
+# enable_overlayfs by prefixing the plain token.
+RC_STUB="$ROOT/rcstub"
+mkdir -p "$RC_STUB"
+cat > "$RC_STUB/raspi-config" << 'STUB'
+#!/usr/bin/env bash
+f="$STUB_BOOT/cmdline.txt"
+state=absent
+if [[ -e "$f.photo-frame.orig" ]]; then
+  if grep -q 'overlayroot=' "$f.photo-frame.orig"; then state=polluted; else state=clean; fi
+fi
+printf '%s orig=%s\n' "$2" "$state" >> "$STUB_LOG"
+if [[ "$2" == enable_overlayfs ]]; then
+  { printf 'overlayroot=tmpfs '; cat "$f"; } > "$f.tmp" && mv "$f.tmp" "$f"
+fi
+STUB
+chmod +x "$RC_STUB/raspi-config"
+step_overlay_real() { # runs a real (non-dry) step_overlay against $BK
+  : > "$ROOT/rc.log"
+  OUT="$(PATH="$RC_STUB:$PATH" STUB_BOOT="$BK" STUB_LOG="$ROOT/rc.log" bash -c 'source "$1"; B=$2
+    as_root() { "$@"; }; run() { printf "RUN %s\n" "$*"; "$@"; }; boot_dir() { printf "%s\n" "$B"; }
+    cmdline_path() { printf "%s/cmdline.txt\n" "$B"; }; findmnt() { return 1; }; boot_ro_configured() { return 1; }
+    DRY=0; WRITABLE=0; DATA_IS_PARTITION=1; step_overlay' _ "$INSTALL" "$BK" 2>&1)"
+  RC=$?
+}
+bk_reset "$PI_LINE"
+step_overlay_real
+assert_eq "$RC" 0 "real step_overlay exit"
+assert_eq "$(cat "$ROOT/rc.log")" "enable_bootro orig=clean
+enable_overlayfs orig=clean" "the clean backup exists before raspi-config touches anything"
+assert_eq "$(orig_of)" "$PI_LINE" "backup holds the pre-overlay line"
+assert_eq "$(cat "$BK/cmdline.txt")" "overlayroot=tmpfs:recurse=0 $PI_LINE" "cmdline ends with exactly the recurse=0 token"
+assert_contains "$OUT" "ok: the overlay filesystem" "real step_overlay reports success"
+# re-run on an already-overlaid frame whose backup came from the previous version
+printf 'overlayroot=tmpfs %s\n' "$PI_LINE" > "$BK/cmdline.txt.photo-frame.orig"
+step_overlay_real
+assert_eq "$RC" 0 "real step_overlay re-run exit"
+assert_eq "$(head -n 1 "$ROOT/rc.log")" "enable_bootro orig=clean" "re-run: polluted backup cleaned before raspi-config"
+assert_eq "$(orig_of)" "$PI_LINE" "re-run: backup holds the pre-overlay line"
+assert_eq "$(cat "$BK/cmdline.txt")" "overlayroot=tmpfs:recurse=0 $PI_LINE" "re-run: still exactly one recurse=0 token"
+# a refused backup stops the step before raspi-config runs
+bk_reset "overlayroot=tmpfs console=tty1 rootwait"
+step_overlay_real
+if [[ "$RC" -ne 0 ]]; then ok; else bad "step_overlay must stop when the backup is refused"; fi
+assert_eq "$(cat "$ROOT/rc.log")" "" "refused backup: raspi-config never ran"
+assert_eq "$(cat "$BK/cmdline.txt")" "overlayroot=tmpfs console=tty1 rootwait" "refused backup: cmdline unchanged"
+# dry run: the backup step is listed before raspi-config's overlay commands
+run_install --dry-run --owner-key "$FIX/owner.pub"
+S14="$(printf '%s\n' "$OUT" | sed -n '/^\[14\/14\]/,$p')"
+L_BK="$(printf '%s\n' "$S14" | grep -n 'photo-frame.orig' | head -n 1 | cut -d: -f1)"
+L_BRO="$(printf '%s\n' "$S14" | grep -n 'raspi-config nonint enable_bootro' | head -n 1 | cut -d: -f1)"
+L_EOV="$(printf '%s\n' "$S14" | grep -n 'raspi-config nonint enable_overlayfs' | head -n 1 | cut -d: -f1)"
+if [[ -n "$L_BK" && -n "$L_BRO" && -n "$L_EOV" && "$L_BK" -lt "$L_BRO" && "$L_BK" -lt "$L_EOV" ]]; then ok; else
+  bad "dry run must list the cmdline backup before enable_bootro/enable_overlayfs ($L_BK/$L_BRO/$L_EOV)"
+fi
+assert_contains "$S14" "without any overlayroot token" "dry run: the backup has no overlay token"
 
 # remove_copied_originals: deletes a root original only when /data holds an
 # identical copy (same content and mode); never touches the copy.
