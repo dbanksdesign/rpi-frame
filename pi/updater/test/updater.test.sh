@@ -38,7 +38,13 @@ STUB
 cat > "$STUBS/systemctl" <<'STUB'
 #!/usr/bin/env bash
 echo "$*" >> "$STUB_STATE/systemctl.log"
+echo "systemctl $*" >> "$STUB_STATE/order.log"
 if [[ -e "$STUB_STATE/systemctl_fail_first" ]]; then rm -f "$STUB_STATE/systemctl_fail_first"; exit 1; fi
+STUB
+# sync: records its argv and where `current` points at that moment.
+cat > "$STUBS/sync" <<'STUB'
+#!/usr/bin/env bash
+echo "sync $* current=$(readlink "$FRAME_DATA_DIR/current" 2>/dev/null)" >> "$STUB_STATE/order.log"
 STUB
 if ! command -v flock > /dev/null 2>&1; then
   cat > "$STUBS/flock" <<'STUB'
@@ -358,6 +364,25 @@ t_default_lock_outside_data() {
   esac
 }
 
+t_sync_around_switch() {
+  new_sandbox
+  old_release v0.0.1 202401010000; ln -s releases/v0.0.1 "$FRAME_DATA_DIR/current"
+  publish_release v1.0.0
+  run_update v1.0.0
+  assert_eq "$RC" 0 "exit code"
+  local order first_sync after_swap restart
+  order="$(cat "$STUB_STATE/order.log" 2>/dev/null)"
+  first_sync="$(printf '%s\n' "$order" | grep -n '^sync ' | head -1)"
+  after_swap="$(printf '%s\n' "$order" | grep -n '^sync .*current=releases/v1.0.0$' | head -1 | cut -d: -f1)"
+  restart="$(printf '%s\n' "$order" | grep -n '^systemctl restart' | head -1 | cut -d: -f1)"
+  case "$first_sync" in
+    *"current=releases/v0.0.1") ok ;;
+    *) bad "the new release is synced before current switches (order: $order)" ;;
+  esac
+  assert_true "the new release dir is what gets synced first" test -n "$(printf '%s\n' "$order" | grep -F "sync -f $FRAME_DATA_DIR/releases/v1.0.0 current=releases/v0.0.1")"
+  if [[ -n "$after_swap" && -n "$restart" && "$after_swap" -lt "$restart" ]]; then ok; else bad "sync again after the swap, before the restart (order: $order)"; fi
+}
+
 t_health_fail_first_install() {
   new_sandbox
   publish_release v1.0.0
@@ -367,7 +392,7 @@ t_health_fail_first_install() {
   assert_eq "$(status_json)" '{"state":"failed","tag":"v1.0.0","message":"The new version didn'"'"'t start"}' "status"
 }
 
-for t in t_systemctl_fails t_bad_numeric_env t_sigterm_during_health t_releases_symlink t_lock_symlink_not_truncated t_default_lock_outside_data t_health_fail_first_install t_success t_bad_checksum t_garbage_tarball t_health_rollback t_concurrent t_invalid_tags \
+for t in t_systemctl_fails t_bad_numeric_env t_sigterm_during_health t_releases_symlink t_lock_symlink_not_truncated t_default_lock_outside_data t_health_fail_first_install t_sync_around_switch t_success t_bad_checksum t_garbage_tarball t_health_rollback t_concurrent t_invalid_tags \
   t_malicious t_safe_internal_symlink t_first_status_running t_version_mismatch t_first_install_and_reinstall; do
   echo "== $t"
   "$t"

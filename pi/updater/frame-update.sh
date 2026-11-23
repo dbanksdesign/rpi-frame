@@ -199,9 +199,16 @@ if mv --version 2> /dev/null | grep -q GNU; then
 else
   MV_SWAP=(mv -fh) # BSD/macOS (test hosts)
 fi
+# flush <path>: write everything on <path>'s filesystem to disk (ext4 delayed
+# allocation could otherwise commit a rename before the file data). GNU sync -f
+# is syncfs(2); elsewhere (test hosts) a plain sync. Never fails.
+flush() {
+  sync -f "$1" 2> /dev/null || sync 2> /dev/null || true
+}
 point_current_at() { # <relative target>
   ln -sfn "$1" "$DATA/current.new"
   "${MV_SWAP[@]}" "$DATA/current.new" "$DATA/current"
+  flush "$DATA"
 }
 
 # ---- 3. download -------------------------------------------------------------
@@ -264,6 +271,8 @@ fi
 
 # ---- 6. switch, restart, health check, rollback ------------------------------
 PREVIOUS="$(readlink "$DATA/current" 2> /dev/null || true)"
+# The new release's files must be on disk before anything points at them.
+flush "$DEST"
 SWITCHED=1
 point_current_at "releases/$TAG"
 
