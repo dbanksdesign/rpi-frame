@@ -8,3 +8,12 @@ export interface NextPhaseInput {
   minutesWithoutWifi: number;
   hasPhotos: boolean;
 }
+
+export interface SetupState {
+  phase: SetupPhase;
+  showOfflineBanner: boolean;
+  hotspot?: { ssid: string; password: string };
+  tailscaleLoginUrl?: string;
+  lastError?: string;
+  addresses: { mdns: string; tailnet?: string };
+}

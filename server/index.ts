@@ -7,6 +7,13 @@ import { router as apiRouter } from './routes/api';
 import { ensureDirectories } from './utils/filesystem';
 import { getDataRoot } from './utils/paths';
 import { initWebSocketServer } from './utils/websocket';
+import { getImages } from './utils/imageStore';
+import { run } from './setup/exec';
+import { createWifiManager } from './setup/nmcli';
+import { createTailscaleClient } from './setup/tailscale';
+import { createSetupService } from './setup/setupService';
+import { startPortal } from './setup/portal';
+import { createSetupRouter, createDisabledSetupRouter } from './routes/setup';
 
 const app = express();
 const server = createServer(app);
@@ -26,6 +33,27 @@ ensureDirectories();
 const uploadsPath = path.join(getDataRoot(), 'uploads');
 console.log('Serving uploads from:', uploadsPath);
 app.use('/uploads', express.static(uploadsPath));
+
+// Setup (WiFi / Tailscale onboarding). FRAME_SETUP=off disables it for dev machines.
+if (process.env.FRAME_SETUP === 'off') {
+  app.use('/api/setup', createDisabledSetupRouter());
+} else {
+  const setupService = createSetupService({
+    wifi: createWifiManager(run),
+    tailscale: createTailscaleClient(run),
+    now: () => Date.now(),
+    hasPhotos: () => {
+      try {
+        return getImages().length > 0;
+      } catch {
+        return false;
+      }
+    },
+    portalFactory: (service) => startPortal(service),
+  });
+  app.use('/api/setup', createSetupRouter(setupService));
+  setupService.start();
+}
 
 // API routes
 app.use('/api', apiRouter);
