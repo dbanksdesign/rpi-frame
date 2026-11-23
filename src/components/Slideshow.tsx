@@ -127,16 +127,28 @@ function Slideshow({ onShowNav }: SlideshowProps) {
   // Ensure index is valid
   const safeIndex = Math.min(currentIndex, activeImages.length - 1)
 
+  // Only keep the previous (fading out), current, and next (preloaded) images
+  // in the DOM. Rendering every photo keeps all of them decoded in memory,
+  // which adds up fast with a large library.
+  const count = activeImages.length
+  const visibleIndexes = new Set([
+    (safeIndex - 1 + count) % count,
+    safeIndex,
+    (safeIndex + 1) % count,
+  ])
+
   return (
     <div className="slideshow-container">
-      {activeImages.map((image, index) => (
-        <div
-          key={image.id}
-          className={`slideshow-image ${index === safeIndex ? 'active' : ''}`}
-        >
-          <img src={image.path} alt={image.originalName} />
-        </div>
-      ))}
+      {activeImages.map((image, index) =>
+        visibleIndexes.has(index) ? (
+          <div
+            key={image.id}
+            className={`slideshow-image ${index === safeIndex ? 'active' : ''}`}
+          >
+            <img src={image.path} alt={image.originalName} />
+          </div>
+        ) : null
+      )}
     </div>
   )
 }

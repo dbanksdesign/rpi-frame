@@ -3,6 +3,7 @@ import multer from 'multer';
 import path from 'path';
 import fs from 'fs';
 import { exec } from 'child_process';
+import { optimizeImage } from '../utils/optimizeImage';
 import { promisify } from 'util';
 import { 
   ImageMetadata, 
@@ -256,10 +257,19 @@ router.delete('/collections/:collectionId/images/:imageId', (req: Request, res: 
 });
 
 // Upload new image
-router.post('/images/upload', upload.single('image'), (req: Request, res: Response) => {
+router.post('/images/upload', upload.single('image'), async (req: Request, res: Response) => {
   try {
     if (!req.file) {
       return res.status(400).json({ error: 'No file uploaded' });
+    }
+
+    // Downscale to display size so the browser doesn't hold huge decoded bitmaps
+    try {
+      await optimizeImage(req.file.path);
+    } catch (err) {
+      console.error('Image optimization failed, rejecting upload:', err);
+      if (fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path);
+      return res.status(400).json({ error: 'Could not process image file' });
     }
 
     const imageMetadata: ImageMetadata = {
@@ -323,13 +333,26 @@ router.delete('/images/:id', (req: Request, res: Response) => {
   }
 });
 
-// Store display state in memory (since getting status is not reliable across all Pi models)
+// Last state we commanded; only a fallback if X can't be queried
 let displayState = true;
+
+// Ask X for the real monitor power state ("Monitor is On|Off" in `xset q`)
+async function readMonitorState(): Promise<boolean | null> {
+  try {
+    const { stdout } = await execPromise('DISPLAY=:0 xset q', { timeout: 3000 });
+    const match = stdout.match(/Monitor is (On|Off|Standby|Suspend)/i);
+    if (!match) return null;
+    return match[1].toLowerCase() === 'on';
+  } catch {
+    return null;
+  }
+}
 
 // Get display power status
 router.get('/display/status', async (req: Request, res: Response) => {
   try {
-    // Return the stored state
+    const actual = await readMonitorState();
+    if (actual !== null) displayState = actual;
     res.json({ isOn: displayState });
   } catch (error) {
     console.error('Failed to get display status:', error);
