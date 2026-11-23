@@ -5,6 +5,7 @@
   "main": "dist/server/index.js",
   "scripts": {
     "test": "vitest run",
+    "test:updater": "bash pi/updater/test/updater.test.sh",
     "dev": "concurrently \"npm run dev:server\" \"npm run dev:client\"",
     "dev:server": "nodemon --watch server --ext ts --exec tsx server/index.ts",
     "dev:client": "vite",
