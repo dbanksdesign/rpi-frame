@@ -8,8 +8,8 @@ Pi 5 into a plug-and-play frame. It is idempotent: re-run it to repair or upgrad
 1. **Preflight**: checks for bookworm, arm64, systemd, an active NetworkManager, the desktop
    image (raspi-config, LightDM, the `LXDE-pi-x` session), not running in a container, and that
    the read-only overlay is off.
-2. **Packages**: Node 20 from NodeSource's `node_20.x` repo (Debian 12 only has Node 18; the
-   release workflow builds with Node 20), Chromium, unclutter, Avahi, OpenSSH, Tailscale (from
+2. **Packages**: Node 26 (LTS) from NodeSource's `node_26.x` repo (Debian 12 only has Node 18; the
+   release workflow builds with Node 26), Chromium, unclutter, Avahi, OpenSSH, Tailscale (from
    its official bookworm apt repo), plus small tools. Both repo signing keys are downloaded over
    HTTPS and checked against a pinned fingerprint. No `curl | sh`.
 3. **Users**: a `frame` user (locked password, autologin only) in `video audio input render
@@ -158,6 +158,10 @@ and the polkit rule.
 These were checked offline (package indexes, `raspi-config` source, containers), but not yet on a
 real Pi 5. Run through them on the test Pi:
 
+- **Node 26 from NodeSource on bookworm arm64.** The `node_26.x` repo, its signature (checked
+  against the pinned key) and the package index were verified from a build machine, and the app's
+  tests and `sharp` pass on Node 26 in a container. The nodejs package itself is unverified on a
+  real Pi 5: check `node --version` prints `v26.x` and the server and `sharp` run.
 - **First: `/data` must stay writable with the overlay on.** With the overlay enabled, write a
   file to `/data` and one to `/etc/NetworkManager/system-connections`, reboot, and confirm both
   are still there. Also check that `/boot/firmware/cmdline.txt` starts with

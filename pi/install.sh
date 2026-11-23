@@ -34,8 +34,8 @@ UPDATER="/usr/local/sbin/frame-update"
 SUDOERS_FILE="/etc/sudoers.d/photo-frame-update"
 SERVER_UNIT="photo-frame-server.service"
 XSESSION="LXDE-pi-x"
-# The release workflow builds with Node 20, so the frame runs Node 20 too.
-NODE_MAJOR=20
+# The release workflow builds with Node 26 (LTS), so the frame runs Node 26 too.
+NODE_MAJOR=26
 NODESOURCE_KEY_URL="https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key"
 NODESOURCE_FPR="6F71F525282841EEDAF851B42F59B5F99B1BE0B4"
 NODESOURCE_KEYRING="/etc/apt/keyrings/nodesource.gpg"
@@ -528,7 +528,7 @@ step_packages() {
   local apt=(env DEBIAN_FRONTEND=noninteractive apt-get)
   run "${apt[@]}" update
   run "${apt[@]}" install -y ca-certificates curl gnupg
-  # Debian 12 ships nodejs 18, so Node 20 comes from NodeSource's node_20.x repo
+  # Debian 12 ships nodejs 18, so Node 26 comes from NodeSource's node_26.x repo
   # (key fingerprint pinned above, plus an apt pin so Debian's nodejs never wins).
   apt_repo nodesource "$NODESOURCE_KEY_URL" "$NODESOURCE_FPR" "$NODESOURCE_KEYRING" 1 \
     "deb [signed-by=$NODESOURCE_KEYRING] https://deb.nodesource.com/node_${NODE_MAJOR}.x nodistro main"
