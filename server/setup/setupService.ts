@@ -12,6 +12,9 @@ const PASSWORD_ALPHABET = 'ABCDEFGHJKMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz234567
 const PASSWORD_LENGTH = 10;
 const TAILSCALE_RETRY_MS = 15_000;
 const DEFAULT_GRACE_MS = 60_000;
+const DEFAULT_SAVED_NETWORK_GRACE_MS = 5 * 60_000;
+const DEFAULT_RETRY_EVERY_MS = 5 * 60_000;
+const DEFAULT_RETRY_WAIT_MS = 45_000;
 
 export interface SetupService {
   start(): void;
@@ -31,6 +34,12 @@ export interface SetupServiceDeps {
   pollMs?: number;
   hasInternet?: () => Promise<boolean>;
   startupGraceMs?: number;
+  /** Startup grace when a saved WiFi profile exists but there are no photos (default 5 min). */
+  savedNetworkGraceMs?: number;
+  /** While the hotspot is up and a saved WiFi exists, drop it this often to let NetworkManager retry (default 5 min). */
+  retryEveryMs?: number;
+  /** How long each retry waits for the saved WiFi before the hotspot returns (default 45 s). */
+  retryWaitMs?: number;
   /** Current LAN IPv4, evaluated on every getState(). Defaults to the host's interfaces. */
   getLanAddress?: () => string | undefined;
   /** Port the main app is actually reachable on (80 once the port-80 bind succeeds). */
@@ -57,7 +66,10 @@ export function createSetupService(deps: SetupServiceDeps): SetupService {
   const { wifi, tailscale, now, hasPhotos } = deps;
   const pollMs = deps.pollMs ?? 3000;
   const hasInternet = deps.hasInternet ?? defaultHasInternet;
-  const graceMs = deps.startupGraceMs ?? DEFAULT_GRACE_MS;
+  let graceMs = deps.startupGraceMs ?? DEFAULT_GRACE_MS;
+  const savedNetworkGraceMs = deps.savedNetworkGraceMs ?? DEFAULT_SAVED_NETWORK_GRACE_MS;
+  const retryEveryMs = deps.retryEveryMs ?? DEFAULT_RETRY_EVERY_MS;
+  const retryWaitMs = deps.retryWaitMs ?? DEFAULT_RETRY_WAIT_MS;
 
   let timer: NodeJS.Timeout | null = null;
   let startedAt = 0;
@@ -66,6 +78,13 @@ export function createSetupService(deps: SetupServiceDeps): SetupService {
   let wifiDownSince: number | null = null;
   let tailnet: string | undefined;
   let lastError: string | undefined;
+  // Boot check (first poll): a saved WiFi profile means this frame was set up
+  // before, so a missing network is most likely a router still coming back.
+  let bootChecked = false;
+  // READY assumed at boot (saved WiFi + photos, offline) but never confirmed:
+  // once online, the phase is worked out as on a fresh start.
+  let assumedReady = false;
+  let hotspotSince = 0;
 
   let sessionPassword: string | null = null;
   let hotspotUp = false;
@@ -83,6 +102,7 @@ export function createSetupService(deps: SetupServiceDeps): SetupService {
     start() {
       if (timer) return;
       startedAt = now();
+      bootChecked = false;
       void poll();
       timer = setInterval(() => void poll(), pollMs);
     },
@@ -166,6 +186,7 @@ export function createSetupService(deps: SetupServiceDeps): SetupService {
     try {
       await wifi.startHotspot(HOTSPOT_SSID, sessionPassword);
       hotspotUp = true;
+      hotspotSince = now();
     } catch (err) {
       logFailure('wifi.startHotspot', err);
       lastError = err instanceof Error ? err.message : 'Could not start the setup hotspot';
@@ -207,6 +228,41 @@ export function createSetupService(deps: SetupServiceDeps): SetupService {
       });
   }
 
+  async function savedNetwork(): Promise<boolean> {
+    return wifi.hasSavedNetwork().catch((err) => {
+      logFailure('wifi.hasSavedNetwork', err);
+      return false;
+    });
+  }
+
+  const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+
+  /**
+   * In AP mode NetworkManager stops trying saved profiles, so after a long
+   * router outage the hotspot would stay up for good. Drop it for up to
+   * retryWaitMs so NetworkManager can autoconnect; if that fails, bring it
+   * back with the same session password (the screen and QR stay valid).
+   */
+  async function retrySavedNetwork() {
+    if (pendingSubmits > 0 || !timer) return;
+    if (!(await savedNetwork())) return;
+    if (pendingSubmits > 0 || !timer) return;
+    console.log(`[setup] retrying the saved WiFi: hotspot off for up to ${Math.round(retryWaitMs / 1000)} s`);
+    await stopHotspot(false);
+    const deadline = now() + retryWaitMs;
+    let online = false;
+    while (timer) {
+      online = await wifi.isConnected().catch(() => false);
+      if (online || now() >= deadline) break;
+      await sleep(Math.min(pollMs, Math.max(0, deadline - now())));
+    }
+    if (online) {
+      wifiDownSince = null;
+    } else if (timer && phase === 'NO_WIFI') {
+      await startHotspot();
+    }
+  }
+
   function poll(): Promise<void> {
     if (polling || pendingSubmits > 0) return Promise.resolve();
     const p = runPoll().finally(() => {
@@ -223,6 +279,19 @@ export function createSetupService(deps: SetupServiceDeps): SetupService {
         logFailure('wifi.isConnected', err);
         return false;
       });
+      if (!bootChecked) {
+        bootChecked = true;
+        if (await savedNetwork()) {
+          if (hasPhotos() && !wifiUp) {
+            // After a power cut the router may take minutes: keep the slideshow
+            // (with the banner) and let the 30-minute rule decide, from now.
+            phase = 'READY';
+            assumedReady = true;
+          } else if (!hasPhotos()) {
+            graceMs = Math.max(graceMs, savedNetworkGraceMs);
+          }
+        }
+      }
       if (wifiUp) wifiDownSince = null;
       else if (wifiDownSince === null) wifiDownSince = now();
 
@@ -241,8 +310,10 @@ export function createSetupService(deps: SetupServiceDeps): SetupService {
         : { loggedIn: false };
       tailnet = ts.loggedIn ? (ts.tailnetIp ?? ts.hostname) : undefined;
 
+      const current: SetupPhase = assumedReady && wifiUp ? 'NO_WIFI' : phase;
+      if (wifiUp || phase !== 'READY') assumedReady = false;
       const result = nextPhase({
-        current: phase,
+        current,
         wifiUp,
         internet,
         tailscaleLoggedIn: ts.loggedIn,
@@ -256,6 +327,7 @@ export function createSetupService(deps: SetupServiceDeps): SetupService {
       if (phase === 'NO_WIFI') {
         const inGrace = now() - startedAt < graceMs;
         if (!hotspotUp && !inGrace) await startHotspot();
+        else if (hotspotUp && now() - hotspotSince >= retryEveryMs) await retrySavedNetwork();
       } else if (hotspotUp || sessionPassword) {
         await stopHotspot(true);
       }

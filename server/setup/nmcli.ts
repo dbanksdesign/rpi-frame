@@ -17,6 +17,11 @@ export interface WifiManager {
    * supported fallback), so a cabled frame never starts the hotspot.
    */
   isConnected(): Promise<boolean>;
+  /**
+   * True if any saved wifi profile other than the setup Hotspot exists (so
+   * NetworkManager may join it by itself once the router is back).
+   */
+  hasSavedNetwork(): Promise<boolean>;
 }
 
 const HOTSPOT_CONNECTION = 'Hotspot';
@@ -97,6 +102,21 @@ export function createWifiManager(run: Run): WifiManager {
         return stdout.split('\n').some((line) => {
           const [, type, state, connection] = splitTerse(line);
           return (type === 'wifi' || type === 'ethernet') && state === 'connected' && connection !== HOTSPOT_CONNECTION;
+        });
+      } catch {
+        return false;
+      }
+    },
+
+    async hasSavedNetwork() {
+      try {
+        // Terse UUID:TYPE:NAME; NAME is last and has ':' / '\' backslash-escaped.
+        const { stdout } = await run('nmcli', ['-t', '-f', 'UUID,TYPE,NAME', 'connection', 'show']);
+        return stdout.split('\n').some((line) => {
+          if (!line) return false;
+          const [, type, ...rest] = splitTerse(line);
+          const name = rest.join(':');
+          return (type === '802-11-wireless' || type === 'wifi') && name !== HOTSPOT_CONNECTION;
         });
       } catch {
         return false;

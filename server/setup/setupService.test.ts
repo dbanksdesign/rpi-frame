@@ -3,7 +3,7 @@ import { createSetupService } from './setupService';
 import type { WifiManager } from './nmcli';
 import type { TailscaleClient } from './tailscale';
 
-function setup(opts: { grace?: number } = {}) {
+function setup(opts: { grace?: number; savedGrace?: number; retryEveryMs?: number; retryWaitMs?: number } = {}) {
   let t = 1_000_000;
   const f = {
     wifiUp: false,
@@ -11,6 +11,7 @@ function setup(opts: { grace?: number } = {}) {
     connectError: null as Error | null,
     internet: true,
     photos: false,
+    saved: false,
   };
   const wifi = {
     scan: vi.fn(async () => []),
@@ -20,6 +21,7 @@ function setup(opts: { grace?: number } = {}) {
     startHotspot: vi.fn(async () => {}),
     stopHotspot: vi.fn(async () => {}),
     isConnected: vi.fn(async () => f.wifiUp),
+    hasSavedNetwork: vi.fn(async () => f.saved),
   } satisfies WifiManager;
   const tailscale = {
     status: vi.fn(async () => (f.tsLoggedIn ? { loggedIn: true, tailnetIp: '100.1.2.3' } : { loggedIn: false })),
@@ -35,6 +37,9 @@ function setup(opts: { grace?: number } = {}) {
     hasInternet: async () => f.internet,
     pollMs: 1000,
     startupGraceMs: opts.grace ?? 0,
+    savedNetworkGraceMs: opts.savedGrace,
+    retryEveryMs: opts.retryEveryMs,
+    retryWaitMs: opts.retryWaitMs,
     getLanAddress: () => lanFixture.ip,
     getAdminPort: () => adminPort.value,
   });
@@ -42,7 +47,11 @@ function setup(opts: { grace?: number } = {}) {
     t += ms;
     await vi.advanceTimersByTimeAsync(ms);
   };
-  return { f, wifi, tailscale, lanFixture, adminPort, service, tick };
+  // Advance in 1 s steps so the clock and the timers stay in step.
+  const advance = async (ms: number) => {
+    for (let done = 0; done < ms; done += 1000) await tick(1000);
+  };
+  return { f, wifi, tailscale, lanFixture, adminPort, service, tick, advance };
 }
 
 describe('setupService', () => {
@@ -316,6 +325,146 @@ describe('setupService', () => {
     const calls = s.wifi.isConnected.mock.calls.length;
     await s.tick(10000);
     expect(s.wifi.isConnected.mock.calls.length).toBe(calls);
+  });
+
+  describe('after a power cut (saved WiFi profile, router still down)', () => {
+    it('boots into READY + banner when photos exist; NO_WIFI and hotspot only after 30 min', async () => {
+      const s = setup({ grace: 60_000 });
+      s.f.saved = true;
+      s.f.photos = true;
+      s.service.start();
+      await s.tick();
+      expect(s.service.getState()).toMatchObject({ phase: 'READY', showOfflineBanner: true });
+      await s.advance(28 * 60_000);
+      expect(s.service.getState().phase).toBe('READY');
+      expect(s.wifi.startHotspot).not.toHaveBeenCalled();
+      await s.advance(3 * 60_000);
+      expect(s.service.getState().phase).toBe('NO_WIFI');
+      expect(s.wifi.startHotspot).toHaveBeenCalledTimes(1);
+      expect(s.wifi.hasSavedNetwork).toHaveBeenCalled();
+      s.service.stop();
+    });
+
+    it('boots with photos and the router back: normal flow (Tailscale screen if logged out)', async () => {
+      const s = setup();
+      s.f.saved = true;
+      s.f.photos = true;
+      s.service.start();
+      await s.tick();
+      expect(s.service.getState().phase).toBe('READY');
+      s.f.wifiUp = true;
+      await s.tick();
+      expect(s.service.getState()).toMatchObject({ phase: 'NO_TAILSCALE', showOfflineBanner: false });
+      s.f.tsLoggedIn = true;
+      await s.tick();
+      expect(s.service.getState().phase).toBe('READY');
+      s.service.stop();
+    });
+
+    it('with a saved network but no photos the hotspot waits 5 minutes, not 60 s', async () => {
+      const s = setup({ grace: 60_000 });
+      s.f.saved = true;
+      s.service.start();
+      await s.advance(4 * 60_000 + 50_000);
+      expect(s.service.getState().phase).toBe('NO_WIFI');
+      expect(s.wifi.startHotspot).not.toHaveBeenCalled();
+      await s.advance(15_000);
+      expect(s.wifi.startHotspot).toHaveBeenCalledTimes(1);
+      s.service.stop();
+    });
+
+    it('without a saved network nothing changes: hotspot after the 60 s grace, no retries', async () => {
+      const s = setup({ grace: 60_000 });
+      s.f.photos = true;
+      s.service.start();
+      await s.advance(59_000);
+      expect(s.wifi.startHotspot).not.toHaveBeenCalled();
+      expect(s.service.getState().phase).toBe('NO_WIFI');
+      await s.advance(2_000);
+      expect(s.wifi.startHotspot).toHaveBeenCalledTimes(1);
+      await s.advance(12 * 60_000);
+      expect(s.wifi.stopHotspot).not.toHaveBeenCalled();
+      expect(s.wifi.startHotspot).toHaveBeenCalledTimes(1);
+      s.service.stop();
+    });
+  });
+
+  describe('hotspot retry while a saved network exists', () => {
+    it('drops the hotspot every 5 minutes; when the saved WiFi joins, the phase leaves NO_WIFI', async () => {
+      const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+      const s = setup({ savedGrace: 0 });
+      s.f.saved = true;
+      s.service.start();
+      await s.tick();
+      expect(s.service.isHotspotUp()).toBe(true);
+      await s.advance(4 * 60_000);
+      expect(s.wifi.stopHotspot).not.toHaveBeenCalled();
+      await s.advance(61_000);
+      expect(s.wifi.stopHotspot).toHaveBeenCalledTimes(1);
+      expect(s.service.isHotspotUp()).toBe(false);
+      expect(s.service.getState().hotspot).toBeUndefined();
+      expect(logSpy.mock.calls.filter((c) => String(c[0]).includes('[setup] retrying the saved WiFi'))).toHaveLength(1);
+      s.f.wifiUp = true; // the router is back: NetworkManager autoconnects
+      await s.advance(3_000);
+      expect(s.service.getState().phase).toBe('NO_TAILSCALE');
+      expect(s.wifi.startHotspot).toHaveBeenCalledTimes(1);
+      expect(s.service.isHotspotUp()).toBe(false);
+      logSpy.mockRestore();
+      s.service.stop();
+    });
+
+    it('a failed retry restores the hotspot after ~45 s with the SAME password', async () => {
+      const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+      const s = setup({ savedGrace: 0 });
+      s.f.saved = true;
+      s.service.start();
+      await s.tick();
+      const pw = s.service.getState().hotspot!.password;
+      await s.advance(5 * 60_000 + 1_000);
+      expect(s.wifi.stopHotspot).toHaveBeenCalledTimes(1);
+      expect(s.service.isHotspotUp()).toBe(false);
+      await s.advance(40_000);
+      expect(s.service.isHotspotUp()).toBe(false);
+      await s.advance(8_000);
+      expect(s.service.isHotspotUp()).toBe(true);
+      expect(s.wifi.startHotspot).toHaveBeenCalledTimes(2);
+      expect(s.wifi.startHotspot).toHaveBeenLastCalledWith('PhotoFrame-Setup', pw);
+      expect(s.service.getState().hotspot?.password).toBe(pw);
+      expect(s.service.getState().phase).toBe('NO_WIFI');
+      // and it tries again 5 minutes later
+      await s.advance(5 * 60_000 + 1_000);
+      expect(s.wifi.stopHotspot).toHaveBeenCalledTimes(2);
+      logSpy.mockRestore();
+      s.service.stop();
+    });
+
+    it('never retries while a portal submit is pending', async () => {
+      const s = setup({ savedGrace: 0 });
+      s.f.saved = true;
+      s.service.start();
+      await s.tick();
+      let release!: () => void;
+      s.wifi.connect.mockImplementationOnce(() => new Promise<void>((_r, rej) => (release = () => rej(new Error('bad')))));
+      const p = s.service.submitWifi('Home', 'pw', false);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(s.wifi.stopHotspot).toHaveBeenCalledTimes(1); // the submit's own stop
+      await s.advance(6 * 60_000);
+      expect(s.wifi.stopHotspot).toHaveBeenCalledTimes(1);
+      release();
+      await p;
+      expect(s.service.isHotspotUp()).toBe(true);
+      s.service.stop();
+    });
+
+    it('no retry without a saved network', async () => {
+      const s = setup();
+      s.service.start();
+      await s.tick();
+      await s.advance(11 * 60_000);
+      expect(s.wifi.stopHotspot).not.toHaveBeenCalled();
+      expect(s.service.isHotspotUp()).toBe(true);
+      s.service.stop();
+    });
   });
 
   it('reports the current LAN address and admin port, recomputed on every getState', () => {

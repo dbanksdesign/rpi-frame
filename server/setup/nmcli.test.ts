@@ -92,6 +92,36 @@ describe('hotspot', () => {
   });
 });
 
+describe('hasSavedNetwork', () => {
+  it('true when a saved wifi profile other than the Hotspot exists', async () => {
+    const { run, calls } = fakeRun([
+      {
+        stdout:
+          '33333333-3333-4333-8333-333333333333:802-11-wireless:Hotspot\n' +
+          '44444444-4444-4444-8444-444444444444:802-3-ethernet:Wired connection 1\n' +
+          '11111111-1111-4111-8111-111111111111:802-11-wireless:Home\\:5G\n',
+      },
+    ]);
+    expect(await createWifiManager(run).hasSavedNetwork()).toBe(true);
+    expect(calls[0]).toEqual({ cmd: 'nmcli', args: ['-t', '-f', 'UUID,TYPE,NAME', 'connection', 'show'] });
+  });
+  it('accepts the short "wifi" type name too', async () => {
+    const { run } = fakeRun([{ stdout: '11111111-1111-4111-8111-111111111111:wifi:Home\n' }]);
+    expect(await createWifiManager(run).hasSavedNetwork()).toBe(true);
+  });
+  it('false with only the Hotspot, only ethernet, nothing, or on error', async () => {
+    const only = (stdout: string) => createWifiManager(fakeRun([{ stdout }]).run).hasSavedNetwork();
+    expect(await only('33333333-3333-4333-8333-333333333333:802-11-wireless:Hotspot\n')).toBe(false);
+    expect(await only('44444444-4444-4444-8444-444444444444:802-3-ethernet:Wired connection 1\n')).toBe(false);
+    expect(await only('')).toBe(false);
+    expect(await createWifiManager(fakeRun([{ error: new Error('x') }]).run).hasSavedNetwork()).toBe(false);
+  });
+  it('a profile whose escaped name only looks like the Hotspot still counts', async () => {
+    const { run } = fakeRun([{ stdout: '11111111-1111-4111-8111-111111111111:802-11-wireless:Hotspot\\:2\n' }]);
+    expect(await createWifiManager(run).hasSavedNetwork()).toBe(true);
+  });
+});
+
 describe('isConnected', () => {
   it('true for a connected wifi device', async () => {
     const { run, calls } = fakeRun([{ stdout: 'eth0:ethernet:unavailable:\nwlan0:wifi:connected:Home\n' }]);
