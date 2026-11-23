@@ -26,6 +26,12 @@ export interface SetupService {
   getState(): SetupState;
   scanNetworks(): Promise<WifiNetwork[]>;
   submitWifi(ssid: string, password: string | null, hidden?: boolean): Promise<void>;
+  /**
+   * Someone is using the setup page (the portal calls this for GET /, GET /networks
+   * and POST /wifi, never for captive-portal probes): the hotspot retry waits
+   * until this is retryEveryMs old, so it does not cut them off mid-setup.
+   */
+  notePortalActivity(): void;
 }
 
 export interface SetupServiceDeps {
@@ -38,7 +44,10 @@ export interface SetupServiceDeps {
   startupGraceMs?: number;
   /** Startup grace when a saved WiFi profile exists but there are no photos (default 5 min). */
   savedNetworkGraceMs?: number;
-  /** While the hotspot is up and a saved WiFi exists, drop it this often to let NetworkManager retry (default 5 min). */
+  /**
+   * While the hotspot is up and a saved WiFi exists, drop it this often to let NetworkManager retry
+   * (default 5 min). A retry also waits until the last setup-page activity is this old.
+   */
   retryEveryMs?: number;
   /** How long each retry waits for the saved WiFi before the hotspot returns (default 45 s). */
   retryWaitMs?: number;
@@ -95,6 +104,8 @@ export function createSetupService(deps: SetupServiceDeps): SetupService {
   // once online, the phase is worked out as on a fresh start.
   let assumedReady = false;
   let hotspotSince = 0;
+  // Last request from a person on the setup page (this hotspot session only).
+  let lastPortalActivityAt = -Infinity;
   let polledOnce = false;
 
   let sessionPassword: string | null = null;
@@ -168,6 +179,10 @@ export function createSetupService(deps: SetupServiceDeps): SetupService {
         pendingSubmits--;
       });
     },
+
+    notePortalActivity() {
+      lastPortalActivityAt = now();
+    },
   };
 
   async function doSubmit(ssid: string, password: string | null, hidden?: boolean) {
@@ -205,7 +220,11 @@ export function createSetupService(deps: SetupServiceDeps): SetupService {
   }
 
   async function startHotspot() {
-    if (!sessionPassword) sessionPassword = generatePassword();
+    if (!sessionPassword) {
+      // A new hotspot session: activity from an earlier one must not hold back its retries.
+      sessionPassword = generatePassword();
+      lastPortalActivityAt = -Infinity;
+    }
     try {
       await wifi.startHotspot(HOTSPOT_SSID, sessionPassword);
       hotspotUp = true;
@@ -267,9 +286,9 @@ export function createSetupService(deps: SetupServiceDeps): SetupService {
    * back with the same session password (the screen and QR stay valid).
    */
   async function retrySavedNetwork() {
-    if (pendingSubmits > 0 || !timer) return;
+    if (pendingSubmits > 0 || !timer || setupPageInUse()) return;
     if (!(await savedNetwork())) return;
-    if (pendingSubmits > 0 || !timer) return;
+    if (pendingSubmits > 0 || !timer || setupPageInUse()) return;
     console.log(`[setup] retrying the saved WiFi: hotspot off for up to ${Math.round(retryWaitMs / 1000)} s`);
     await stopHotspot(false);
     const deadline = now() + retryWaitMs;
@@ -284,6 +303,11 @@ export function createSetupService(deps: SetupServiceDeps): SetupService {
     } else if (timer && phase === 'NO_WIFI') {
       await startHotspot();
     }
+  }
+
+  /** Someone used the setup page within the retry interval (re-checked on every poll). */
+  function setupPageInUse(): boolean {
+    return now() - lastPortalActivityAt < retryEveryMs;
   }
 
   function poll(): Promise<void> {
@@ -350,7 +374,7 @@ export function createSetupService(deps: SetupServiceDeps): SetupService {
       if (phase === 'NO_WIFI') {
         const inGrace = now() - startedAt < graceMs;
         if (!hotspotUp && !inGrace) await startHotspot();
-        else if (hotspotUp && now() - hotspotSince >= retryEveryMs) await retrySavedNetwork();
+        else if (hotspotUp && now() - hotspotSince >= retryEveryMs && !setupPageInUse()) await retrySavedNetwork();
       } else if (hotspotUp || sessionPassword) {
         await stopHotspot(true);
       }

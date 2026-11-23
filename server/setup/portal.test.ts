@@ -14,6 +14,7 @@ function fakeService(): SetupService {
     getState: vi.fn(() => ({ phase: 'NO_WIFI', showOfflineBanner: false, addresses: { mdns: 'photoframe.local' } })),
     scanNetworks: vi.fn(async () => [{ ssid: 'Home', signal: 80, secured: true }]),
     submitWifi: vi.fn(async () => {}),
+    notePortalActivity: vi.fn(),
   } as SetupService;
 }
 
@@ -142,5 +143,38 @@ describe('portal', () => {
     expect((await fetch(base + '/generate_204', { redirect: 'manual' })).status).toBe(302);
     up.mockReturnValue(false);
     expect(await (await fetch(base + '/')).text()).toBe('main app');
+  });
+
+  it('records setup activity only for the setup page, /networks and POST /wifi', async () => {
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const { base, service } = await boot();
+    const noted = vi.mocked(service.notePortalActivity);
+    for (const p of ['/generate_204', '/gen_204', '/hotspot-detect.html', '/library/test/success.html', '/connecttest.txt', '/ncsi.txt', '/whatever', '/networks/x']) {
+      await fetch(base + p, { redirect: 'manual' });
+    }
+    await fetch(base + '/wifi', { redirect: 'manual' }); // GET /wifi is not the form submit
+    expect(noted).not.toHaveBeenCalled();
+    await fetch(base + '/');
+    expect(noted).toHaveBeenCalledTimes(1);
+    await fetch(base + '/networks');
+    expect(noted).toHaveBeenCalledTimes(2);
+    await fetch(base + '/wifi', { method: 'POST', headers: json, body: JSON.stringify({ ssid: 'Home', password: 'pw' }) });
+    expect(noted).toHaveBeenCalledTimes(3);
+    await fetch(base + '/wifi', { method: 'POST', headers: json, body: JSON.stringify({ ssid: '' }) });
+    expect(noted).toHaveBeenCalledTimes(4);
+    await fetch(base + '/wifi', { method: 'POST', headers: json, body: '{"ssid":' });
+    expect(noted).toHaveBeenCalledTimes(5);
+    expect(noted.mock.calls.every((c) => c.length === 0)).toBe(true);
+    errSpy.mockRestore();
+  });
+
+  it('records no activity while the hotspot is down (inert)', async () => {
+    const service = fakeService();
+    vi.mocked(service.isHotspotUp).mockReturnValue(false);
+    const { base } = await boot(service);
+    await fetch(base + '/');
+    await fetch(base + '/networks');
+    await fetch(base + '/wifi', { method: 'POST', headers: json, body: JSON.stringify({ ssid: 'Home', password: 'pw' }) });
+    expect(service.notePortalActivity).not.toHaveBeenCalled();
   });
 });

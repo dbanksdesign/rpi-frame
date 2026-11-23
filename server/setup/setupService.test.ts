@@ -1,5 +1,9 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { createSetupService } from './setupService';
+import express from 'express';
+import type { Server } from 'http';
+import type { AddressInfo } from 'net';
+import { createSetupService, type SetupService } from './setupService';
+import { createPortalMiddleware } from './portal';
 import type { WifiManager } from './nmcli';
 import type { TailscaleClient } from './tailscale';
 
@@ -465,6 +469,103 @@ describe('setupService', () => {
       await s.advance(11 * 60_000);
       expect(s.wifi.stopHotspot).not.toHaveBeenCalled();
       expect(s.service.isHotspotUp()).toBe(true);
+      s.service.stop();
+    });
+  });
+
+  describe('hotspot retry vs. someone using the setup page', () => {
+    // Real HTTP through the portal middleware; only the service's timers are faked.
+    let server: Server | null = null;
+    let logSpy: ReturnType<typeof vi.spyOn>;
+    beforeEach(() => {
+      vi.useRealTimers();
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] });
+      logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    });
+    afterEach(() => {
+      server?.close();
+      server?.closeAllConnections();
+      server = null;
+      logSpy.mockRestore();
+    });
+
+    async function portal(service: SetupService) {
+      const app = express();
+      app.use(createPortalMiddleware(service));
+      const srv = app.listen(0, '127.0.0.1');
+      server = srv;
+      await new Promise((r) => srv.once('listening', r));
+      return `http://127.0.0.1:${(srv.address() as AddressInfo).port}`;
+    }
+    const json = { 'content-type': 'application/json' };
+    const requests: Record<string, (base: string) => Promise<Response>> = {
+      'GET /': (b) => fetch(b + '/'),
+      'GET /networks': (b) => fetch(b + '/networks'),
+      'POST /wifi (invalid)': (b) => fetch(b + '/wifi', { method: 'POST', headers: json, body: JSON.stringify({ ssid: '' }) }),
+      'POST /wifi (malformed)': (b) => fetch(b + '/wifi', { method: 'POST', headers: json, body: '{"ssid":' }),
+    };
+
+    for (const [name, send] of Object.entries(requests)) {
+      it(`${name} postpones the retry until the activity is older than the interval`, async () => {
+        const s = setup({ savedGrace: 0 });
+        s.f.saved = true;
+        const base = await portal(s.service);
+        s.service.start();
+        await s.tick(); // hotspot up
+        expect(s.service.isHotspotUp()).toBe(true);
+        await s.advance(4 * 60_000 + 30_000);
+        expect((await send(base)).status).toBeLessThan(500);
+        // the 5-minute mark of the hotspot passes: no retry while the page is in use
+        await s.advance(60_000);
+        expect(s.wifi.stopHotspot).not.toHaveBeenCalled();
+        expect(s.service.isHotspotUp()).toBe(true);
+        await s.advance(3 * 60_000 + 50_000); // activity 4:50 old
+        expect(s.wifi.stopHotspot).not.toHaveBeenCalled();
+        await s.advance(15_000); // now older than 5 min
+        expect(s.wifi.stopHotspot).toHaveBeenCalledTimes(1);
+        expect(s.service.isHotspotUp()).toBe(false);
+        s.service.stop();
+      });
+    }
+
+    it('captive-portal probes and unknown paths do NOT postpone the retry', async () => {
+      const s = setup({ savedGrace: 0 });
+      s.f.saved = true;
+      const base = await portal(s.service);
+      s.service.start();
+      await s.tick();
+      const probes = ['/generate_204', '/gen_204', '/hotspot-detect.html', '/library/test/success.html', '/connecttest.txt', '/ncsi.txt', '/whatever'];
+      for (let i = 0; i < 9; i++) {
+        await s.advance(30_000);
+        for (const p of probes) expect((await fetch(base + p, { redirect: 'manual' })).status).toBe(302);
+      }
+      expect(s.wifi.stopHotspot).not.toHaveBeenCalled(); // 4:31: probes went through the live portal
+      await s.advance(31_000);
+      expect(s.wifi.stopHotspot).toHaveBeenCalledTimes(1); // the retry, on time
+      s.service.stop();
+    });
+
+    it('activity from an earlier hotspot session does not postpone the next session\'s first retry', async () => {
+      const s = setup({ savedGrace: 0 });
+      s.f.saved = true;
+      const base = await portal(s.service);
+      s.service.start();
+      await s.tick();
+      const firstPw = s.service.getState().hotspot!.password;
+      await s.advance(4 * 60_000 + 50_000);
+      await fetch(base + '/');
+      s.f.wifiUp = true; // the session ends
+      await s.advance(2_000);
+      expect(s.service.isHotspotUp()).toBe(false);
+      s.f.wifiUp = false; // and a new one starts straight away
+      await s.advance(2_000);
+      expect(s.service.isHotspotUp()).toBe(true);
+      expect(s.service.getState().hotspot!.password).not.toBe(firstPw);
+      const stops = s.wifi.stopHotspot.mock.calls.length;
+      await s.advance(4 * 60_000 + 55_000);
+      expect(s.wifi.stopHotspot).toHaveBeenCalledTimes(stops);
+      await s.advance(8_000);
+      expect(s.wifi.stopHotspot).toHaveBeenCalledTimes(stops + 1); // the retry, on time
       s.service.stop();
     });
   });

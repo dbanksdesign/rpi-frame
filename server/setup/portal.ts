@@ -80,7 +80,15 @@ export function createPortalMiddleware(service: SetupService): express.Router {
     next();
   });
 
-  router.get('/', (_req, res) => {
+  // A person is using the setup page (not a captive-portal probe): postpone the
+  // service's hotspot retry. Only these three routes count; probes that a phone
+  // keeps sending while connected must not hold the retry back forever.
+  const noteActivity: express.RequestHandler = (_req, _res, next) => {
+    service.notePortalActivity();
+    next();
+  };
+
+  router.get('/', noteActivity, (_req, res) => {
     res.type('html').send(PAGE);
   });
 
@@ -90,11 +98,11 @@ export function createPortalMiddleware(service: SetupService): express.Router {
     res.status(409).json(SETUP_INACTIVE);
   };
 
-  router.get('/networks', setupOnly, async (_req, res) => {
+  router.get('/networks', noteActivity, setupOnly, async (_req, res) => {
     res.json(await service.scanNetworks());
   });
 
-  router.post('/wifi', setupOnly, express.json({ limit: '4kb' }), (req, res) => {
+  router.post('/wifi', noteActivity, setupOnly, express.json({ limit: '4kb' }), (req, res) => {
     const parsed = parseWifiRequest(req.body);
     if (!parsed) {
       res.status(400).json({ error: 'Invalid WiFi details' });
