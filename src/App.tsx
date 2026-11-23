@@ -6,6 +6,8 @@ import { useMediaQuery } from '@mantine/hooks'
 import { WebSocketProvider } from './context/WebSocketContext'
 import Slideshow from './components/Slideshow'
 import Admin from './components/Admin'
+import Setup from './components/Setup'
+import { useSetupState } from './setup/useSetupState'
 import ErrorBoundary from './components/ErrorBoundary'
 import './App.css'
 
@@ -156,6 +158,7 @@ function AppContent() {
   const navigate = useNavigate()
   const isSlideshow = location.pathname === '/slideshow'
   const [displayOn, setDisplayOn] = useState(true)
+  const setup = useSetupState()
 
   // Fetch display status once on mount
   useEffect(() => {
@@ -172,11 +175,32 @@ function AppContent() {
   }, [])
 
   if (isSlideshow) {
+    if (setup.state && setup.screen !== 'slideshow') {
+      return <Setup state={setup.state} screen={setup.screen} onDismiss={setup.dismissReadyCard} />
+    }
     return (
       <Box pos="relative">
         <ErrorBoundary>
           <Slideshow onShowNav={() => navigate('/manage')} />
         </ErrorBoundary>
+        {setup.state?.showOfflineBanner && (
+          <div
+            style={{
+              position: 'fixed',
+              bottom: 8,
+              right: 8,
+              padding: '4px 10px',
+              fontSize: 14,
+              color: '#f1f3f5',
+              background: 'rgba(0, 0, 0, 0.55)',
+              borderRadius: 6,
+              pointerEvents: 'none',
+              zIndex: 1000,
+            }}
+          >
+            No WiFi — showing saved photos
+          </div>
+        )}
         {!displayOn && <div className="display-blanket" />}
       </Box>
     )
