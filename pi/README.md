@@ -170,6 +170,14 @@ If the overlay is still on, a normal run refuses, because its changes would be l
 reboot. With `--writable` it only turns the overlay off; reboot and re-run. A release that needs
 a new system package also needs `install.sh` to be re-run.
 
+**Disable the overlay only with `./pi/install.sh --writable`, never from the `raspi-config`
+menu.** The installer writes the token as `overlayroot=tmpfs:recurse=0`, and raspi-config's
+disable no longer matches that form, so the menu would leave the frame read-only.
+
+Before its first change to `/boot/firmware/cmdline.txt` the installer keeps the original as
+`cmdline.txt.photo-frame.orig` next to it (never overwritten). If a Pi ever fails to boot after
+an install, put the card in another machine and copy that file back over `cmdline.txt`.
+
 ## Tests
 
 `npm run test:install` (`pi/test/install-dry-run.test.sh`) is offline and needs no root. It checks
@@ -211,8 +219,9 @@ real Pi 5. Run through them on the test Pi:
 - Step 6: the bind mounts at boot (ordering, `nofail`), NetworkManager picking up profiles after
   `nmcli connection reload`, and the fake-hwclock `RequiresMountsFor=/data` drop-in.
 - Step 7: the server's update button working end to end through sudo and systemd-run.
-- Step 8: the server unit with `ProtectHome=yes` and `PrivateTmp=yes`, binding port 80 through
-  `AmbientCapabilities`, and the watchdog after `daemon-reexec`.
+- Step 8: the server unit with `ProtectHome=read-only` (plus `XAUTHORITY`, so Display Off/On can
+  reach X) and `PrivateTmp=yes`, binding port 80 through `AmbientCapabilities`, the
+  `ExecStartPre` Tailscale operator helper, and the watchdog after `daemon-reexec`.
 - Step 9: the polkit rule letting the service scan, connect and start the hotspot, and the
   `address=/#/10.42.0.1` captive DNS making phones open the portal.
 - Step 10: key-only SSH over a Tailscale node shared between tailnets.

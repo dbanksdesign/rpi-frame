@@ -258,6 +258,8 @@ for line in "User=frame" "WorkingDirectory=/data/current" \
   "ProtectHome=read-only" "Environment=XAUTHORITY=/home/frame/.Xauthority" "PrivateTmp=yes"; do
   if grep -qxF "$line" "$SERVER_UNIT" 2> /dev/null; then ok; else bad "server unit lacks [$line]"; fi
 done
+# A frame with no WiFi must not wait for network-online before the setup screen.
+if grep -qE '^Wants=.*network-online\.target' "$SERVER_UNIT"; then bad "server unit must not pull in network-online.target"; else ok; fi
 # xset (Display Off/On) needs the X cookie under /home/frame: never hide /home.
 if grep -qE '^ProtectHome=(yes|true|tmpfs)' "$SERVER_UNIT"; then bad "server unit hides /home (breaks xset)"; else ok; fi
 if [[ -e "$UNITS/photo-frame-display.service" ]]; then bad "retired photo-frame-display.service must not exist"; else ok; fi
@@ -336,6 +338,40 @@ if cl cmdline_has_overlay 'console=tty1 rootwait'; then bad "has_overlay: no tok
 if cl cmdline_has_overlay 'overlayroot=disabled'; then bad "has_overlay: disabled"; else ok; fi
 if cl cmdline_overlay_ok 'overlayroot=tmpfs:recurse=0 console=tty1'; then ok; else bad "overlay_ok: recurse=0"; fi
 if cl cmdline_overlay_ok 'overlayroot=tmpfs console=tty1'; then bad "overlay_ok: plain token would recurse into /data"; else ok; fi
+
+# set_cmdline_first_line: the one write that can stop the Pi from booting.
+CMD="$ROOT/boot"
+mkdir -p "$CMD"
+printf 'console=tty1 root=PARTUUID=ab-02 rootwait\n# second line kept\n' > "$CMD/cmdline.txt"
+scl() { # <line>: runs set_cmdline_first_line on $CMD/cmdline.txt with root/mount helpers stubbed
+  OUT="$(bash -c 'source "$1"; B=$2; as_root() { "$@"; }; run() { "$@"; }; boot_dir() { printf "%s\n" "$B"; }; findmnt() { return 1; }
+    set_cmdline_first_line "$2/cmdline.txt" "$3"' _ "$INSTALL" "$CMD" "$1" 2>&1)"
+  RC=$?
+}
+scl "overlayroot=tmpfs:recurse=0 console=tty1 root=PARTUUID=ab-02 rootwait"
+assert_eq "$RC" 0 "cmdline rewrite exit"
+assert_eq "$(cat "$CMD/cmdline.txt")" "overlayroot=tmpfs:recurse=0 console=tty1 root=PARTUUID=ab-02 rootwait
+# second line kept" "cmdline first line replaced, other lines kept"
+assert_eq "$(cat "$CMD/cmdline.txt.photo-frame.orig" 2> /dev/null)" "console=tty1 root=PARTUUID=ab-02 rootwait
+# second line kept" "original cmdline backed up before the first rewrite"
+scl "console=tty1 root=PARTUUID=ab-02 rootwait"
+assert_eq "$RC" 0 "second cmdline rewrite exit"
+assert_eq "$(head -n 1 "$CMD/cmdline.txt.photo-frame.orig")" "console=tty1 root=PARTUUID=ab-02 rootwait" "backup is never overwritten"
+before_cmd="$(cat "$CMD/cmdline.txt")"
+for badline in "" "   " "overlayroot=tmpfs:recurse=0 console=tty1 rootwait" "noroot=PARTUUID=ab-02"; do
+  scl "$badline"
+  if [[ "$RC" -ne 0 ]]; then ok; else bad "cmdline rewrite must refuse [$badline]"; fi
+  assert_eq "$(cat "$CMD/cmdline.txt")" "$before_cmd" "refused cmdline rewrite leaves the file alone [$badline]"
+done
+assert_eq "$(find "$CMD" -name '*.photo-frame-new' | wc -l | tr -d ' ')" 0 "no staged cmdline file left behind"
+if sed -n '/^set_cmdline_first_line() {/,/^}/p' "$INSTALL" | grep -qw sync; then ok; else bad "set_cmdline_first_line syncs the boot partition"; fi
+# --writable with no cmdline file must fail, not report success
+OUT="$(bash -c 'source "$1"; R=$2; as_root() { "$@"; }; run() { :; }; cmdline_path() { echo "$R/missing/cmdline.txt"; }
+  DRY=0; WRITABLE=1; step_overlay' _ "$INSTALL" "$ROOT" 2>&1)"
+RC=$?
+if [[ "$RC" -ne 0 ]]; then ok; else bad "--writable with a missing cmdline.txt must fail"; fi
+assert_not_contains "$OUT" "ok: " "--writable with a missing cmdline.txt reports no success"
+assert_contains "$OUT" "cmdline" "--writable missing-file message names the file"
 
 # remove_copied_originals: deletes a root original only when /data holds an
 # identical copy (same content and mode); never touches the copy.

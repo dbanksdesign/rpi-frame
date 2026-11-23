@@ -1081,11 +1081,31 @@ cmdline_path() {
   echo "$(boot_dir)/${prefix}cmdline.txt"
 }
 
+# cmdline_line_ok <line>: a kernel cmdline the firmware can boot from: not
+# blank and with a root= token.
+cmdline_line_ok() {
+  local t
+  local -a toks=()
+  read -r -a toks <<< "$1" || true
+  for t in ${toks[@]+"${toks[@]}"}; do
+    if [[ "$t" == root=?* ]]; then return 0; fi
+  done
+  return 1
+}
+
 # set_cmdline_first_line <file> <line>: replace line 1 (the only line the
 # firmware reads), keep any others; temporarily remounts the boot partition
-# rw if it is mounted ro. No chown/chmod: it is vfat.
+# rw if it is mounted ro. This is the one write that can stop the Pi from
+# booting, so: the line must pass cmdline_line_ok, the first original is kept
+# as <file>.photo-frame.orig (never overwritten), the new file is staged and
+# renamed into place, and the vfat partition is synced before and after.
+# No chown/chmod/cp -p: it is vfat.
 set_cmdline_first_line() {
   local file=$1 line=$2 tmp bdir was_ro=0
+  [[ -f "$file" ]] || die "$file does not exist; not touching the boot configuration"
+  if ! cmdline_line_ok "$line"; then
+    die "refusing to write a kernel command line without root= to $file (the Pi would not boot); nothing was changed"
+  fi
   bdir="$(boot_dir)"
   tmp="$(mktemp)"
   { printf '%s\n' "$line"; awk 'NR > 1' "$file"; } > "$tmp"
@@ -1093,8 +1113,14 @@ set_cmdline_first_line() {
     was_ro=1
     run mount -o remount,rw "$bdir"
   fi
+  if [[ ! -e "$file.photo-frame.orig" ]]; then
+    say "backup: $file.photo-frame.orig (restore it on another machine if the Pi does not boot)"
+    as_root cp "$file" "$file.photo-frame.orig"
+  fi
   as_root cp "$tmp" "$file.photo-frame-new"
+  as_root sync
   as_root mv -f "$file.photo-frame-new" "$file"
+  as_root sync
   rm -f "$tmp"
   if [[ $was_ro -eq 1 ]]; then run mount -o remount,ro "$bdir" || warn "could not remount $bdir read-only"; fi
 }
@@ -1111,6 +1137,7 @@ step_overlay() {
       run raspi-config nonint disable_bootro
     else
       cmdline="$(cmdline_path)"
+      [[ -f "$cmdline" ]] || die "$cmdline not found, so the overlay setting cannot be removed; the frame may stay read-only. Check the boot partition."
       IFS= read -r cur < "$cmdline" || true
       new="$(cmdline_overlay_strip "$cur")"
       if [[ "$new" != "$cur" ]]; then

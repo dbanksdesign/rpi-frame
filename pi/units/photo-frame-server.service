@@ -1,6 +1,7 @@
 [Unit]
 Description=Photo frame server (slideshow, admin page, setup and updates)
-Wants=network-online.target
+# Ordering only (no Wants=network-online.target): a frame with no WiFi must not
+# wait for NetworkManager-wait-online before it can show the setup screen.
 After=network-online.target NetworkManager.service tailscaled.service
 # Releases, photos and metadata all live on the data partition.
 RequiresMountsFor=/data
