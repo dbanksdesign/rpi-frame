@@ -30,7 +30,11 @@ url=""
 for a in "$@"; do url="$a"; done
 case "$url" in
   http://health.test/*)
-    [[ "$(cat "$STUB_STATE/health")" == ok ]] && exit 0
+    echo probe >> "$STUB_STATE/health.log"
+    case "$(cat "$STUB_STATE/health")" in
+      ok) exit 0 ;;
+      once) echo fail > "$STUB_STATE/health"; exit 0 ;; # answers once, then fails
+    esac
     exit 22 ;;
 esac
 exec "$REAL_CURL" "$@"
@@ -39,6 +43,7 @@ cat > "$STUBS/systemctl" <<'STUB'
 #!/usr/bin/env bash
 echo "$*" >> "$STUB_STATE/systemctl.log"
 echo "systemctl $*" >> "$STUB_STATE/order.log"
+if [[ "$1" == is-active ]]; then [[ -e "$STUB_STATE/inactive" ]] && exit 3; exit 0; fi
 if [[ -e "$STUB_STATE/systemctl_fail_first" ]]; then rm -f "$STUB_STATE/systemctl_fail_first"; exit 1; fi
 STUB
 # sync: records its argv and where `current` points at that moment.
@@ -73,7 +78,7 @@ new_sandbox() {
   echo ok > "$STUB_STATE/health"
   export FRAME_RELEASE_BASE_URL="file://$SB/srv"
   export FRAME_HEALTH_URL="http://health.test/api/health"
-  export FRAME_HEALTH_TIMEOUT=2
+  export FRAME_HEALTH_TIMEOUT=6
   export FRAME_HEALTH_INTERVAL=1
   export FRAME_KEEP=2
   export FRAME_SERVICE=photo-frame-server
@@ -110,7 +115,8 @@ run_update() {
 }
 
 status_json() { cat "$FRAME_DATA_DIR/update-status.json" 2>/dev/null; }
-calls() { local n; n=$(grep -c . "$STUB_STATE/systemctl.log" 2>/dev/null) || n=0; echo "$n"; }
+# calls: how many times the service was restarted
+calls() { local n; n=$(grep -c '^restart ' "$STUB_STATE/systemctl.log" 2>/dev/null) || n=0; echo "$n"; }
 cur() { readlink "$FRAME_DATA_DIR/current" 2>/dev/null; }
 no_tmp_left() { ! compgen -G "$FRAME_DATA_DIR/releases/.tmp-*" > /dev/null; }
 file_mode() { stat -c %a "$1" 2>/dev/null || stat -f %Lp "$1"; }
@@ -127,7 +133,9 @@ t_success() {
   assert_eq "$(status_json)" '{"state":"succeeded","tag":"v1.0.0","message":"Updated to v1.0.0"}' "status"
   assert_eq "$(ls "$FRAME_DATA_DIR/releases" | tr '\n' ' ')" "v0.0.3 v1.0.0 " "pruned to newest 2"
   assert_eq "$(calls)" 1 "systemctl restart calls"
-  assert_eq "$(cat "$STUB_STATE/systemctl.log")" "restart photo-frame-server" "systemctl args"
+  assert_eq "$(grep -v '^is-active ' "$STUB_STATE/systemctl.log")" "restart photo-frame-server" "systemctl args"
+  assert_eq "$(grep -c . "$STUB_STATE/health.log")" 3 "three consecutive good probes before healthy"
+  assert_eq "$(grep -c -x 'is-active --quiet photo-frame-server' "$STUB_STATE/systemctl.log")" 3 "is-active checked on each good probe"
   assert_true "no temp dir left" no_tmp_left
   assert_eq "$(file_mode "$FRAME_DATA_DIR/update-status.json")" 644 "status mode"
 }
@@ -383,6 +391,41 @@ t_sync_around_switch() {
   if [[ -n "$after_swap" && -n "$restart" && "$after_swap" -lt "$restart" ]]; then ok; else bad "sync again after the swap, before the restart (order: $order)"; fi
 }
 
+t_health_answers_once_then_fails() {
+  new_sandbox
+  old_release v0.0.1 202401010000; ln -s releases/v0.0.1 "$FRAME_DATA_DIR/current"
+  publish_release v1.0.0
+  echo once > "$STUB_STATE/health"
+  run_update v1.0.0
+  assert_eq "$RC" 11 "exit code"
+  assert_eq "$(cur)" releases/v0.0.1 "rolled back"
+  assert_eq "$(status_json)" '{"state":"failed","tag":"v1.0.0","message":"The new version didn'"'"'t start; restored the previous version"}' "status"
+}
+
+t_health_service_inactive() {
+  new_sandbox
+  old_release v0.0.1 202401010000; ln -s releases/v0.0.1 "$FRAME_DATA_DIR/current"
+  publish_release v1.0.0
+  : > "$STUB_STATE/inactive" # the health URL answers, but the unit is not active
+  run_update v1.0.0
+  assert_eq "$RC" 11 "exit code"
+  assert_eq "$(cur)" releases/v0.0.1 "rolled back"
+}
+
+t_bad_successes_env() {
+  new_sandbox
+  publish_release v1.0.0
+  local v
+  for v in 0 03 x 1.5; do
+    ( export FRAME_HEALTH_SUCCESSES="$v"; run_update v1.0.0; echo "$RC" > "$SB/rc" )
+    assert_eq "$(cat "$SB/rc")" 2 "bad FRAME_HEALTH_SUCCESSES [$v]"
+  done
+  assert_true "status untouched by bad FRAME_HEALTH_SUCCESSES" test ! -e "$FRAME_DATA_DIR/update-status.json"
+  ( export FRAME_HEALTH_SUCCESSES=1; run_update v1.0.0; echo "$RC" > "$SB/rc" )
+  assert_eq "$(cat "$SB/rc")" 0 "FRAME_HEALTH_SUCCESSES=1"
+  assert_eq "$(grep -c . "$STUB_STATE/health.log")" 1 "one probe with FRAME_HEALTH_SUCCESSES=1"
+}
+
 t_health_fail_first_install() {
   new_sandbox
   publish_release v1.0.0
@@ -392,7 +435,7 @@ t_health_fail_first_install() {
   assert_eq "$(status_json)" '{"state":"failed","tag":"v1.0.0","message":"The new version didn'"'"'t start"}' "status"
 }
 
-for t in t_systemctl_fails t_bad_numeric_env t_sigterm_during_health t_releases_symlink t_lock_symlink_not_truncated t_default_lock_outside_data t_health_fail_first_install t_sync_around_switch t_success t_bad_checksum t_garbage_tarball t_health_rollback t_concurrent t_invalid_tags \
+for t in t_systemctl_fails t_bad_numeric_env t_sigterm_during_health t_releases_symlink t_lock_symlink_not_truncated t_default_lock_outside_data t_health_fail_first_install t_sync_around_switch t_health_answers_once_then_fails t_health_service_inactive t_bad_successes_env t_success t_bad_checksum t_garbage_tarball t_health_rollback t_concurrent t_invalid_tags \
   t_malicious t_safe_internal_symlink t_first_status_running t_version_mismatch t_first_install_and_reinstall; do
   echo "== $t"
   "$t"

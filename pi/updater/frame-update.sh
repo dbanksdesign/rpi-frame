@@ -21,6 +21,8 @@ HEALTH_URL="${FRAME_HEALTH_URL:-http://localhost:3000/api/health}"
 HEALTH_TIMEOUT="${FRAME_HEALTH_TIMEOUT:-60}"
 HEALTH_INTERVAL="${FRAME_HEALTH_INTERVAL:-2}"
 KEEP="${FRAME_KEEP:-2}"
+# Consecutive good probes (health URL answers AND the unit is active) required.
+HEALTH_SUCCESSES="${FRAME_HEALTH_SUCCESSES:-3}"
 
 LOCK_FILE="${FRAME_LOCK_FILE:-/run/frame-update.lock}"
 
@@ -35,6 +37,11 @@ for _v in "$HEALTH_TIMEOUT" "$HEALTH_INTERVAL" "$KEEP"; do
     exit 2
   fi
 done
+# A positive count without leading zeros (bash would read 08 as octal).
+if ! [[ "$HEALTH_SUCCESSES" =~ ^[1-9][0-9]{0,2}$ ]]; then
+  echo "frame-update: FRAME_HEALTH_SUCCESSES must be a whole number from 1 to 999 without leading zeros" >&2
+  exit 2
+fi
 
 # The releases directory must be a real directory owned by us (root in
 # production), so a less-privileged user cannot redirect what we write/delete.
@@ -283,10 +290,19 @@ healthy=0
 if systemctl restart "$SERVICE"; then
   write_status running "Checking the new version…"
   deadline=$((SECONDS + HEALTH_TIMEOUT))
+  streak=0
   while :; do
-    if curl -fsS --max-time 3 "$HEALTH_URL" > /dev/null 2>&1; then
-      healthy=1
-      break
+    # One answer is not enough: a server that answers once and then crashes
+    # (Restart=always) must still be rolled back. Any failure resets the streak.
+    if curl -fsS --max-time 3 "$HEALTH_URL" > /dev/null 2>&1 \
+      && systemctl is-active --quiet "$SERVICE"; then
+      streak=$((streak + 1))
+      if [[ $streak -ge $HEALTH_SUCCESSES ]]; then
+        healthy=1
+        break
+      fi
+    else
+      streak=0
     fi
     [[ $SECONDS -ge $deadline ]] && break
     sleep "$HEALTH_INTERVAL" &   # background + wait so signals interrupt it
