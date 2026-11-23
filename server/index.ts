@@ -14,6 +14,7 @@ import { createTailscaleClient } from './setup/tailscale';
 import { createSetupService } from './setup/setupService';
 import { startPortal } from './setup/portal';
 import { createSetupRouter, createDisabledSetupRouter } from './routes/setup';
+import { createSystemRouter } from './routes/system';
 
 const app = express();
 const server = createServer(app);
@@ -57,6 +58,9 @@ if (process.env.FRAME_SETUP === 'off') {
 // Global JSON parser goes after the setup router, which has its own parser and
 // error handler (a malformed WiFi body must not reach Express's default logger).
 app.use(express.json());
+
+// System routes (health, version) must be mounted before the main API router
+app.use('/api', createSystemRouter());
 
 // API routes
 app.use('/api', apiRouter);
