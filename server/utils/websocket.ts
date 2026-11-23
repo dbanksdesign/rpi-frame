@@ -26,8 +26,31 @@ type ClientMessage =
 
 let wss: WebSocketServer | null = null;
 
+/**
+ * Let an additional http server (e.g. the port-80 listener) accept WebSocket
+ * upgrades on /ws, served by the same WebSocketServer.
+ */
+export function attachWebSocketUpgrade(server: Server): void {
+  server.on('upgrade', (req, socket, head) => {
+    let pathname = '';
+    try {
+      pathname = new URL(req.url ?? '', 'http://localhost').pathname;
+    } catch {
+      /* fall through to reject */
+    }
+    if (!wss || pathname !== '/ws') {
+      socket.write('HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n');
+      socket.destroy();
+      return;
+    }
+    const target = wss;
+    target.handleUpgrade(req, socket, head, (ws) => target.emit('connection', ws, req));
+  });
+}
+
 export function initWebSocketServer(server: Server): WebSocketServer {
-  wss = new WebSocketServer({ server, path: '/ws' });
+  wss = new WebSocketServer({ noServer: true });
+  attachWebSocketUpgrade(server);
 
   wss.on('connection', (ws: WebSocket) => {
     console.log('WebSocket client connected');

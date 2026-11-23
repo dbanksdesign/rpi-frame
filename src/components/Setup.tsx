@@ -4,6 +4,7 @@ import { QRCodeSVG } from 'qrcode.react'
 import type { SetupState } from '../setup/types'
 import type { Screen } from '../setup/screenFor'
 import { wifiQrPayload } from '../setup/wifiQr'
+import { adminUrl } from '../setup/adminUrl'
 
 const READY_CARD_MS = 60_000
 
@@ -91,18 +92,21 @@ function ReadyCard({ state, onDismiss }: { state: SetupState; onDismiss: () => v
     }
   }, [onDismiss])
 
-  const mdnsUrl = `http://${state.addresses.mdns}:3000`
-  const tailnet = state.addresses.tailnet
+  const mdnsUrl = adminUrl(state.addresses, 'mdns')
+  const lanUrl = adminUrl(state.addresses, 'lan')
+  const tailnetUrl = adminUrl(state.addresses, 'tailnet')
+  const qrUrl = lanUrl ?? mdnsUrl
   return (
     <>
       <Title order={1} fz={56}>You're all set</Title>
       <div style={{ display: 'flex', gap: 48, alignItems: 'center', flexWrap: 'wrap' }}>
         <Stack gap="lg" style={{ flex: 1, minWidth: 360 }}>
-          <Text fz={44} fw={700} ff="monospace">{mdnsUrl}</Text>
-          {tailnet && <Text fz={36} ff="monospace">{`http://${tailnet}:3000`}</Text>}
+          {mdnsUrl && <Text fz={44} fw={700} ff="monospace">{mdnsUrl}</Text>}
+          {lanUrl && <Text fz={36} ff="monospace">{lanUrl}</Text>}
+          {tailnetUrl && <Text fz={36} ff="monospace">{tailnetUrl}</Text>}
           <Text fz={32}>Add photos from your phone: open this address while on the same WiFi.</Text>
         </Stack>
-        <Qr value={mdnsUrl} />
+        {qrUrl && <Qr value={qrUrl} />}
       </div>
     </>
   )

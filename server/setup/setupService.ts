@@ -1,4 +1,6 @@
 import crypto from 'crypto';
+import os from 'os';
+import { pickLanAddress } from './lanAddress';
 import type { WifiManager, WifiNetwork } from './nmcli';
 import type { TailscaleClient } from './tailscale';
 import { nextPhase } from './stateMachine';
@@ -11,14 +13,11 @@ const PASSWORD_LENGTH = 10;
 const TAILSCALE_RETRY_MS = 15_000;
 const DEFAULT_GRACE_MS = 60_000;
 
-export interface PortalHandle {
-  close(): void;
-  port: number;
-}
-
 export interface SetupService {
   start(): void;
   stop(): void;
+  /** True while the setup hotspot is up; the port-80 portal middleware follows this. */
+  isHotspotUp(): boolean;
   getState(): SetupState;
   scanNetworks(): Promise<WifiNetwork[]>;
   submitWifi(ssid: string, password: string | null, hidden?: boolean): Promise<void>;
@@ -32,8 +31,10 @@ export interface SetupServiceDeps {
   pollMs?: number;
   hasInternet?: () => Promise<boolean>;
   startupGraceMs?: number;
-  /** Opens the captive portal; called when the hotspot comes up. */
-  portalFactory?: (service: SetupService) => PortalHandle;
+  /** Current LAN IPv4, evaluated on every getState(). Defaults to the host's interfaces. */
+  getLanAddress?: () => string | undefined;
+  /** Port the main app is actually reachable on (80 once the port-80 bind succeeds). */
+  getAdminPort?: () => 80 | 3000;
 }
 
 async function defaultHasInternet(): Promise<boolean> {
@@ -68,7 +69,6 @@ export function createSetupService(deps: SetupServiceDeps): SetupService {
 
   let sessionPassword: string | null = null;
   let hotspotUp = false;
-  let portal: PortalHandle | null = null;
   // A poll in flight, and a FIFO chain of submits. Submits wait for the poll and
   // for earlier submits; polls skip while any submit is pending.
   let polling: Promise<void> | null = null;
@@ -90,14 +90,24 @@ export function createSetupService(deps: SetupServiceDeps): SetupService {
     stop() {
       if (timer) clearInterval(timer);
       timer = null;
-      closePortal();
+      hotspotUp = false;
+    },
+
+    isHotspotUp() {
+      return hotspotUp;
     },
 
     getState() {
+      const lan = getLan();
       const state: SetupState = {
         phase,
         showOfflineBanner,
-        addresses: { mdns: MDNS_ADDRESS, ...(tailnet ? { tailnet } : {}) },
+        addresses: {
+          mdns: MDNS_ADDRESS,
+          ...(lan ? { lan } : {}),
+          ...(tailnet ? { tailnet } : {}),
+          adminPort: deps.getAdminPort?.() ?? 3000,
+        },
       };
       if (hotspotUp && sessionPassword) state.hotspot = { ssid: HOTSPOT_SSID, password: sessionPassword };
       if (tailscaleUrl) state.tailscaleLoginUrl = tailscaleUrl;
@@ -143,14 +153,12 @@ export function createSetupService(deps: SetupServiceDeps): SetupService {
     console.error(`[setup] ${what} failed: ${msg.replace(/\s+/g, ' ')}`);
   }
 
-  function closePortal() {
-    if (!portal) return;
+  function getLan(): string | undefined {
     try {
-      portal.close();
+      return deps.getLanAddress ? deps.getLanAddress() : pickLanAddress(os.networkInterfaces());
     } catch {
-      /* ignore */
+      return undefined;
     }
-    portal = null;
   }
 
   async function startHotspot() {
@@ -158,13 +166,6 @@ export function createSetupService(deps: SetupServiceDeps): SetupService {
     try {
       await wifi.startHotspot(HOTSPOT_SSID, sessionPassword);
       hotspotUp = true;
-      if (!portal && deps.portalFactory) {
-        try {
-          portal = deps.portalFactory(service);
-        } catch {
-          console.error('[setup] could not open captive portal');
-        }
-      }
     } catch (err) {
       logFailure('wifi.startHotspot', err);
       lastError = err instanceof Error ? err.message : 'Could not start the setup hotspot';
@@ -173,7 +174,6 @@ export function createSetupService(deps: SetupServiceDeps): SetupService {
 
   /** endSession: forget the password so the next hotspot gets a fresh one. */
   async function stopHotspot(endSession: boolean) {
-    closePortal();
     const wasUp = hotspotUp;
     hotspotUp = false;
     if (endSession) sessionPassword = null;

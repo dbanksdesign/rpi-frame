@@ -1,5 +1,5 @@
 import express from 'express';
-import type { SetupService, PortalHandle } from './setupService';
+import type { SetupService } from './setupService';
 import { parseWifiRequest } from './wifiRequest';
 
 const GATEWAY_URL = 'http://10.42.0.1/';
@@ -67,19 +67,28 @@ const PAGE = `<!doctype html>
 </body>
 </html>`;
 
-export function startPortal(service: SetupService, port = 80): PortalHandle {
-  const app = express();
-  app.use(express.json({ limit: '4kb' }));
+/**
+ * Captive-portal middleware for the port-80 app. Inert (calls next()) unless the
+ * setup hotspot is up; while it is up it serves the setup page, GET /networks and
+ * POST /wifi, and redirects probe URLs and everything else to the gateway.
+ */
+export function createPortalMiddleware(service: SetupService): express.Router {
+  const router = express.Router();
 
-  app.get('/', (_req, res) => {
+  router.use((_req, _res, next) => {
+    if (!service.isHotspotUp()) return next('router');
+    next();
+  });
+
+  router.get('/', (_req, res) => {
     res.type('html').send(PAGE);
   });
 
-  app.get('/networks', async (_req, res) => {
+  router.get('/networks', async (_req, res) => {
     res.json(await service.scanNetworks());
   });
 
-  app.post('/wifi', (req, res) => {
+  router.post('/wifi', express.json({ limit: '4kb' }), (req, res) => {
     const parsed = parseWifiRequest(req.body);
     if (!parsed) {
       res.status(400).json({ error: 'Invalid WiFi details' });
@@ -92,28 +101,16 @@ export function startPortal(service: SetupService, port = 80): PortalHandle {
   });
 
   // Captive-portal probes and anything else: send the client to the setup page.
-  app.use((_req, res) => {
+  router.use((_req, res) => {
     res.redirect(302, GATEWAY_URL);
   });
 
   // Never let Express log a body-parse error (it may quote the typed password).
-  app.use((err: unknown, _req: express.Request, res: express.Response, next: express.NextFunction) => {
+  router.use((err: unknown, _req: express.Request, res: express.Response, next: express.NextFunction) => {
     if (!err) return next();
     console.error('[portal] rejected a malformed request body');
     res.status(400).json({ error: 'Invalid request' });
   });
 
-  const handle: PortalHandle = { port, close: () => {} };
-  const server = app.listen(port, '0.0.0.0', () => {
-    const addr = server.address();
-    if (addr && typeof addr === 'object') handle.port = addr.port;
-  });
-  server.on('error', (err: NodeJS.ErrnoException) => {
-    console.error(`[portal] could not listen on port ${port}: ${err.code ?? 'error'}`);
-  });
-  handle.close = () => {
-    server.close();
-    server.closeAllConnections();
-  };
-  return handle;
+  return router;
 }

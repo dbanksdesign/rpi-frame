@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest'
 import { screenFor } from './screenFor'
 import type { SetupState } from './types'
 
-const base: SetupState = { phase: 'READY', showOfflineBanner: false, addresses: { mdns: 'photoframe.local' } }
+const base: SetupState = { phase: 'READY', showOfflineBanner: false, addresses: { mdns: 'photoframe.local', adminPort: 80 } }
 
 describe('screenFor', () => {
   it('NO_WIFI -> wifi-instructions', () => {

@@ -15,5 +15,5 @@ export interface SetupState {
   hotspot?: { ssid: string; password: string };
   tailscaleLoginUrl?: string;
   lastError?: string;
-  addresses: { mdns: string; tailnet?: string };
+  addresses: { mdns: string; tailnet?: string; lan?: string; adminPort: 80 | 3000 };
 }

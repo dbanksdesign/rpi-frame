@@ -25,8 +25,8 @@ function setup(opts: { grace?: number } = {}) {
     status: vi.fn(async () => (f.tsLoggedIn ? { loggedIn: true, tailnetIp: '100.1.2.3' } : { loggedIn: false })),
     startLogin: vi.fn(async () => 'https://login.tailscale.com/a/abc'),
   } satisfies TailscaleClient;
-  const portal = { close: vi.fn(), port: 80 };
-  const portalFactory = vi.fn(() => portal);
+  const lanFixture = { ip: '192.168.1.20' as string | undefined };
+  const adminPort = { value: 80 as 80 | 3000 };
   const service = createSetupService({
     wifi,
     tailscale,
@@ -35,13 +35,14 @@ function setup(opts: { grace?: number } = {}) {
     hasInternet: async () => f.internet,
     pollMs: 1000,
     startupGraceMs: opts.grace ?? 0,
-    portalFactory,
+    getLanAddress: () => lanFixture.ip,
+    getAdminPort: () => adminPort.value,
   });
   const tick = async (ms = 1000) => {
     t += ms;
     await vi.advanceTimersByTimeAsync(ms);
   };
-  return { f, wifi, tailscale, portal, portalFactory, service, tick };
+  return { f, wifi, tailscale, lanFixture, adminPort, service, tick };
 }
 
 describe('setupService', () => {
@@ -55,7 +56,7 @@ describe('setupService', () => {
     errSpy.mockRestore();
   });
 
-  it('starts hotspot with random password in NO_WIFI and opens portal', async () => {
+  it('starts hotspot with random password in NO_WIFI and the portal goes live', async () => {
     const s = setup();
     s.service.start();
     await s.tick();
@@ -65,7 +66,7 @@ describe('setupService', () => {
     expect(ssid).toBe('PhotoFrame-Setup');
     expect(pw).toMatch(/^[A-HJ-KM-NP-Za-km-z2-9]{10}$/);
     expect(s.service.getState().hotspot).toEqual({ ssid, password: pw });
-    expect(s.portalFactory).toHaveBeenCalledTimes(1);
+    expect(s.service.isHotspotUp()).toBe(true);
     await s.tick(5000);
     expect(s.wifi.startHotspot).toHaveBeenCalledTimes(1);
     expect(s.service.getState().hotspot?.password).toBe(pw);
@@ -91,7 +92,7 @@ describe('setupService', () => {
     s.f.wifiUp = true;
     await s.tick();
     expect(s.wifi.stopHotspot).toHaveBeenCalledTimes(1);
-    expect(s.portal.close).toHaveBeenCalledTimes(1);
+    expect(s.service.isHotspotUp()).toBe(false);
     expect(s.service.getState().hotspot).toBeUndefined();
     expect(s.service.getState().phase).toBe('NO_TAILSCALE');
     s.service.stop();
@@ -158,7 +159,7 @@ describe('setupService', () => {
     const st = s.service.getState();
     expect(st.phase).toBe('READY');
     expect(st.tailscaleLoginUrl).toBeUndefined();
-    expect(st.addresses).toEqual({ mdns: 'photoframe.local', tailnet: '100.1.2.3' });
+    expect(st.addresses).toEqual({ mdns: 'photoframe.local', tailnet: '100.1.2.3', lan: '192.168.1.20', adminPort: 80 });
     s.service.stop();
   });
 
@@ -298,10 +299,21 @@ describe('setupService', () => {
     const s = setup();
     s.service.start();
     await s.tick();
+    expect(s.service.isHotspotUp()).toBe(true);
     s.service.stop();
-    expect(s.portal.close).toHaveBeenCalled();
+    expect(s.service.isHotspotUp()).toBe(false);
     const calls = s.wifi.isConnected.mock.calls.length;
     await s.tick(10000);
     expect(s.wifi.isConnected.mock.calls.length).toBe(calls);
+  });
+
+  it('reports the current LAN address and admin port, recomputed on every getState', () => {
+    const s = setup();
+    expect(s.service.getState().addresses).toEqual({ mdns: 'photoframe.local', lan: '192.168.1.20', adminPort: 80 });
+    s.lanFixture.ip = '192.168.1.99';
+    s.adminPort.value = 3000;
+    expect(s.service.getState().addresses).toMatchObject({ lan: '192.168.1.99', adminPort: 3000 });
+    s.lanFixture.ip = undefined;
+    expect(s.service.getState().addresses.lan).toBeUndefined();
   });
 });

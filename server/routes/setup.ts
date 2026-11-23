@@ -39,10 +39,10 @@ export function createSetupRouter(service: SetupService): Router {
 }
 
 /** Router used when the real setup service is disabled (FRAME_SETUP=off). */
-export function createDisabledSetupRouter(): Router {
+export function createDisabledSetupRouter(getAdminPort: () => 80 | 3000 = () => 3000): Router {
   const router = Router();
   router.get('/state', (_req, res) => {
-    res.json({ phase: 'READY', showOfflineBanner: false, addresses: { mdns: 'photoframe.local' } });
+    res.json({ phase: 'READY', showOfflineBanner: false, addresses: { mdns: 'photoframe.local', adminPort: getAdminPort() } });
   });
   return router;
 }

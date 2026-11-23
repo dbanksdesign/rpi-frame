@@ -120,7 +120,7 @@ Plug it in. The screen shows "join WiFi `PhotoFrame-Setup`" with a QR code and p
 phone the setup page opens, he picks his WiFi and the frame's screen says whether it worked.
 Next the screen shows a Tailscale login QR. He signs in with his account and shares the machine
 with the owner. Then the slideshow starts, and the admin page is at
-`http://<name>.local:3000/`. The owner can now reach it over Tailscale (`ssh <user>@<tailscale
+`http://<name>.local` (port 80; the app also still listens on 3000). The ready card also shows the frame's current LAN IP URL, and its QR encodes that, so it works on phones without mDNS. The owner can now reach it over Tailscale (`ssh <user>@<tailscale
 name>` with the owner key, and the admin page).
 
 ## Publishing a release

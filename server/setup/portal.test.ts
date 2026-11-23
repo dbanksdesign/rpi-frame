@@ -1,27 +1,41 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
-import { startPortal } from './portal';
+import express from 'express';
+import type { Server } from 'http';
+import type { AddressInfo } from 'net';
+import { createPortalMiddleware } from './portal';
 import type { SetupService } from './setupService';
 
 function fakeService(): SetupService {
   return {
     start: vi.fn(),
     stop: vi.fn(),
+    isHotspotUp: vi.fn(() => true),
     getState: vi.fn(() => ({ phase: 'NO_WIFI', showOfflineBanner: false, addresses: { mdns: 'photoframe.local' } })),
     scanNetworks: vi.fn(async () => [{ ssid: 'Home', signal: 80, secured: true }]),
     submitWifi: vi.fn(async () => {}),
   } as SetupService;
 }
 
-let handle: { close(): void; port: number } | null = null;
+let server: Server | null = null;
 afterEach(() => {
-  handle?.close();
-  handle = null;
+  server?.close();
+  server?.closeAllConnections();
+  server = null;
 });
 
 async function boot(service = fakeService()) {
-  handle = startPortal(service, 0);
-  await new Promise((r) => setTimeout(r, 50));
-  return { service, base: `http://127.0.0.1:${handle.port}` };
+  const app = express();
+  app.use(createPortalMiddleware(service));
+  app.get('/api/ping', (_req, res) => {
+    res.json({ pong: true });
+  });
+  app.get('/', (_req, res) => {
+    res.send('main app');
+  });
+  const s = app.listen(0, '127.0.0.1');
+  server = s;
+  await new Promise((r) => s.once('listening', r));
+  return { service, base: `http://127.0.0.1:${(s.address() as AddressInfo).port}` };
 }
 
 const json = { 'content-type': 'application/json' };
@@ -86,5 +100,31 @@ describe('portal', () => {
     });
     expect(ok.status).toBe(202);
     expect(service.submitWifi).toHaveBeenCalledWith('Home', 'pw', false);
+  });
+
+  it('is inert when the hotspot is down: the normal app answers', async () => {
+    const service = fakeService();
+    vi.mocked(service.isHotspotUp).mockReturnValue(false);
+    const { base } = await boot(service);
+    expect(await (await fetch(base + '/')).text()).toBe('main app');
+    expect(await (await fetch(base + '/api/ping')).json()).toEqual({ pong: true });
+    const probe = await fetch(base + '/generate_204', { redirect: 'manual' });
+    expect(probe.status).toBe(404);
+    const wifi = await fetch(base + '/wifi', { method: 'POST', headers: json, body: '{bad' });
+    expect(wifi.status).toBe(404);
+    expect(service.submitWifi).not.toHaveBeenCalled();
+  });
+
+  it('follows the hotspot state on the same app', async () => {
+    const service = fakeService();
+    const up = vi.mocked(service.isHotspotUp);
+    up.mockReturnValue(false);
+    const { base } = await boot(service);
+    expect(await (await fetch(base + '/')).text()).toBe('main app');
+    up.mockReturnValue(true);
+    expect(await (await fetch(base + '/')).text()).toContain('<form');
+    expect((await fetch(base + '/generate_204', { redirect: 'manual' })).status).toBe(302);
+    up.mockReturnValue(false);
+    expect(await (await fetch(base + '/')).text()).toBe('main app');
   });
 });
