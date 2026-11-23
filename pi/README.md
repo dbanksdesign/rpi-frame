@@ -134,8 +134,11 @@ from your Tailscale admin console (`https://login.tailscale.com/admin/machines`)
 does not always remove it. Once the brother has joined Tailscale and shared the frame, you keep
 remote access with your SSH key and the admin page; you do not need to do anything else.
 After you confirm, the script keeps going and powers the frame off by itself even if your SSH
-session drops (it ignores the hang-up). Its output goes to `/run/prepare-handoff.log` (RAM, gone
-at shutdown) and is also shown on your terminal while the session lasts.
+session drops (it ignores the hang-up). Do not press Ctrl-C after confirming: once it has
+started it ignores Ctrl-C too, so stopping it half-way cannot leave the frame half-wiped. Its
+output goes to `/run/prepare-handoff.log` (RAM, gone at shutdown; emptied at the start of each
+run, readable only by root) and is also shown on your terminal while the session lasts. After
+wiping the Tailscale state it sets the `frame` operator again, so the next owner can log in.
 Unplug it only after the green LED stops flashing.
 
 ## First boot (the brother)

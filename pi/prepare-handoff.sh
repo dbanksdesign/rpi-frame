@@ -204,12 +204,17 @@ stop_tail() {
   fi
 }
 start_logging() {
-  ( umask 077; : >> "$LOG" ) 2> /dev/null || die "cannot write the log $LOG; nothing was changed"
+  # Truncate: a log left by an earlier run in this boot must not be replayed.
+  ( umask 077; : > "$LOG" ) 2> /dev/null || die "cannot write the log $LOG; nothing was changed"
+  chmod 600 "$LOG" 2> /dev/null || die "cannot make the log $LOG private; nothing was changed"
   printf '\nOutput continues in %s; the frame powers off by itself, even if this session drops.\n' "$LOG"
+  printf 'Ctrl-C is ignored from here on.\n'
+  # Ignore before anything else starts, so every child (tail too) inherits it.
+  # INT too: a Ctrl-C meant to "stop watching" would otherwise leave the frame half-wiped.
+  trap '' HUP PIPE INT
   tail -n +1 -f "$LOG" 2> /dev/null &
   TAIL_PID=$!
   trap stop_tail EXIT
-  trap '' HUP PIPE
   exec >> "$LOG" 2>&1 < /dev/null
 }
 
@@ -343,7 +348,8 @@ wifi_keyfiles() {
   done
 }
 
-tailscale_logged_in() { command -v tailscale > /dev/null 2>&1 && tailscale status > /dev/null 2>&1; }
+# (bounded: a hung tailscaled counts as "not logged in"; its state is wiped anyway)
+tailscale_logged_in() { command -v tailscale > /dev/null 2>&1 && with_timeout "$TS_TIMEOUT" tailscale status > /dev/null 2>&1; }
 
 # ---- steps -------------------------------------------------------------------------------
 print_summary() {

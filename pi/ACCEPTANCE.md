@@ -437,8 +437,9 @@ SPARE PI ONLY (this wipes it). Run at a keyboard or over SSH on the **LAN**, nev
 
 - [ ] `sudo ./pi/prepare-handoff.sh --dry-run --clear-photos` lists the plan and changes nothing.
 - [ ] `sudo ./pi/prepare-handoff.sh --clear-photos` (or `--keep-photos`). Type `handoff` when
-  asked. **Do not press Ctrl-C after confirming**: it is not ignored, and stopping the script
-  half-way leaves the frame half-wiped. Watch it finish and power off. Output is also in
+  asked. **Do not press Ctrl-C after confirming**: once it starts, the script ignores Ctrl-C
+  (and a dropped session), because stopping it half-way would leave the frame half-wiped. Press
+  Ctrl-C once anyway and confirm it keeps going. Watch it finish and power off. Output is also in
   `/run/prepare-handoff.log` while the Pi is up. Unplug only after the green LED stops flashing.
 - [ ] Boot the Pi again. It shows the WiFi setup screen, `PhotoFrame-Setup`, after about a minute.
 - [ ] Log in over Ethernet or the keyboard and check (as appropriate for the mode):

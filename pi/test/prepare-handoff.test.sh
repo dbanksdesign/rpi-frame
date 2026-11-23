@@ -43,7 +43,9 @@ fi
 exit 0'
 make_stub tailscale '
 case "$1" in
-  status) [[ -f "$STUB_STATE/ts-loggedin" ]] && exit 0; exit 1 ;;
+  status)
+    [[ -f "$STUB_STATE/ts-hang" ]] && exec sleep 30
+    [[ -f "$STUB_STATE/ts-loggedin" ]] && exit 0; exit 1 ;;
   logout)
     if [[ -n "${STUB_HUP_PIDFILE:-}" ]]; then kill -HUP "$(cat "$STUB_HUP_PIDFILE")"; sleep 1; fi
     rm -f "$STUB_STATE/ts-loggedin"; exit 0 ;;
@@ -51,7 +53,10 @@ case "$1" in
 esac
 exit 0'
 make_stub systemctl 'exit 0'
-make_stub journalctl 'exit 0'
+# STUB_INT_PGID_FILE: emulate Ctrl-C (SIGINT to the whole foreground process group)
+make_stub journalctl '
+if [[ -n "${STUB_INT_PGID_FILE:-}" && "$1" == --rotate ]]; then kill -INT -- "-$(cat "$STUB_INT_PGID_FILE")"; sleep 1; fi
+exit 0'
 make_stub sync 'exit 0'
 
 UUID_A=11111111-1111-4111-8111-111111111111
@@ -317,6 +322,43 @@ wait "$hp"
 assert_eq "$?" 0 "SIGHUP during run: exit 0"
 assert_eq "$(calls | tail -1)" "systemctl [poweroff]" "SIGHUP: poweroff still last"
 assert_contains "$(calls)" "[delete]" "SIGHUP: wifi deleted"
+# (b2) Ctrl-C after the confirmation: SIGINT to the script's whole process group
+new_sandbox
+set -m # the run gets its own process group, with SIGINT not pre-ignored
+( cd "$SB" && STUB_INT_PGID_FILE="$SB/pgid" exec env FRAME_DATA_DIR="$DATA" FRAME_HANDOFF_LOG="$SB/handoff.log" FRAME_HANDOFF_TEST_ALLOW_NONROOT=1 PATH="$BIN:$PATH" \
+    bash "$SCRIPT" --yes --clear-photos > "$SB/out.txt" 2>&1 < /dev/null ) &
+ip=$!
+set +m
+echo "$ip" > "$SB/pgid"
+wait "$ip"
+assert_eq "$?" 0 "SIGINT during run: exit 0"
+assert_eq "$(calls | tail -1)" "systemctl [poweroff]" "SIGINT: poweroff still recorded last"
+assert_contains "$(calls)" "[delete]" "SIGINT: wifi deleted"
+# (b3) a stale log from an earlier run in the same boot is not replayed, and the log is private
+new_sandbox
+printf 'STALE-EARLIER-RUN\n' > "$SB/handoff.log"
+chmod 644 "$SB/handoff.log"
+run_ph --yes --keep-photos
+assert_eq "$RC" 0 "stale log: exit"
+assert_not_contains "$OUT" "STALE-EARLIER-RUN" "stale log is not shown by the follower"
+assert_not_contains "$(cat "$SB/handoff.log")" "STALE-EARLIER-RUN" "log truncated when logging starts"
+assert_contains "$(cat "$SB/handoff.log")" "Safe to unplug" "new run logged"
+assert_eq "$(stat -c %a "$SB/handoff.log" 2> /dev/null || stat -f %Lp "$SB/handoff.log")" 600 "log is mode 600"
+# (b4) a hung tailscaled must not block the run (status is bounded by a timeout)
+new_sandbox
+: > "$STUB_STATE/ts-hang"
+export FRAME_HANDOFF_TAILSCALE_TIMEOUT=1
+t0=$SECONDS
+run_ph --yes --keep-photos
+unset FRAME_HANDOFF_TAILSCALE_TIMEOUT
+assert_eq "$RC" 0 "hung tailscale status: exit 0"
+if [[ $((SECONDS - t0)) -lt 20 ]]; then ok; else bad "hung tailscale status blocked the run for $((SECONDS - t0)) s"; fi
+assert_eq "$(calls | tail -1)" "systemctl [poweroff]" "hung tailscale status: poweroff still last"
+for tv in 0 abc 012 -1; do
+  OUT="$(cd "$SB" && env FRAME_DATA_DIR="$DATA" FRAME_HANDOFF_TAILSCALE_TIMEOUT="$tv" FRAME_HANDOFF_TEST_ALLOW_NONROOT=1 PATH="$BIN:$PATH" \
+    bash "$SCRIPT" --dry-run --yes --keep-photos 2>&1 < /dev/null)"
+  assert_eq "$?" 2 "bad FRAME_HANDOFF_TAILSCALE_TIMEOUT [$tv]"
+done
 # (c) the log may never live on the persistent partition
 new_sandbox
 for lp in "$DATA/h.log" "/data/h.log" "relative.log" ""; do
