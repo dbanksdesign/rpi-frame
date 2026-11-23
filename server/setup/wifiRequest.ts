@@ -9,8 +9,9 @@ export interface WifiRequest {
  * /wifi and /networks are refused (409): otherwise any LAN/tailnet client, or
  * any website via CORS, could repoint the frame's WiFi or knock it offline.
  */
-export function isSetupActive(service: { isHotspotUp(): boolean; getState(): { phase: string } }): boolean {
-  return service.isHotspotUp() || service.getState().phase === 'NO_WIFI';
+export function isSetupActive(service: { isHotspotUp(): boolean; hasPolled(): boolean; getState(): { phase: string } }): boolean {
+  // Before the first poll the phase is only the initial guess (NO_WIFI).
+  return service.isHotspotUp() || (service.hasPolled() && service.getState().phase === 'NO_WIFI');
 }
 
 export const SETUP_INACTIVE = { error: 'Setup is not active' } as const;

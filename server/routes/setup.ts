@@ -14,7 +14,14 @@ export function createSetupRouter(service: SetupService): Router {
   // router before any global express.json().
   router.use(express.json({ limit: '4kb' }));
 
+  // 503 until the first poll: the phase before that is a guess, and the kiosk
+  // would flash the setup screen after every restart (the frontend keeps its
+  // last state, or the slideshow, on a non-OK answer).
   router.get('/state', (_req, res) => {
+    if (!service.hasPolled()) {
+      res.status(503).json({ error: 'starting' });
+      return;
+    }
     res.json(service.getState());
   });
 

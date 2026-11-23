@@ -29,6 +29,7 @@ function setup(opts: { grace?: number; savedGrace?: number; retryEveryMs?: numbe
   } satisfies TailscaleClient;
   const lanFixture = { ip: '192.168.1.20' as string | undefined };
   const adminPort = { value: 80 as 80 | 3000 };
+  const hostFixture = { name: 'photoframe' };
   const service = createSetupService({
     wifi,
     tailscale,
@@ -42,6 +43,7 @@ function setup(opts: { grace?: number; savedGrace?: number; retryEveryMs?: numbe
     retryWaitMs: opts.retryWaitMs,
     getLanAddress: () => lanFixture.ip,
     getAdminPort: () => adminPort.value,
+    getHostname: () => hostFixture.name,
   });
   const tick = async (ms = 1000) => {
     t += ms;
@@ -51,7 +53,7 @@ function setup(opts: { grace?: number; savedGrace?: number; retryEveryMs?: numbe
   const advance = async (ms: number) => {
     for (let done = 0; done < ms; done += 1000) await tick(1000);
   };
-  return { f, wifi, tailscale, lanFixture, adminPort, service, tick, advance };
+  return { f, wifi, tailscale, lanFixture, adminPort, hostFixture, service, tick, advance };
 }
 
 describe('setupService', () => {
@@ -465,6 +467,32 @@ describe('setupService', () => {
       expect(s.service.isHotspotUp()).toBe(true);
       s.service.stop();
     });
+  });
+
+  it('the mDNS name comes from the hostname (<name>.local)', () => {
+    const s = setup();
+    s.hostFixture.name = 'kitchen-frame';
+    expect(s.service.getState().addresses.mdns).toBe('kitchen-frame.local');
+    s.hostFixture.name = 'Kitchen-Frame.lan';
+    expect(s.service.getState().addresses.mdns).toBe('kitchen-frame.local');
+    s.hostFixture.name = 'photoframe.local';
+    expect(s.service.getState().addresses.mdns).toBe('photoframe.local');
+    s.hostFixture.name = '';
+    expect(s.service.getState().addresses.mdns).toBe('photoframe.local');
+  });
+
+  it('hasPolled() is false until the first poll has completed', async () => {
+    const s = setup();
+    let release!: (v: boolean) => void;
+    s.wifi.isConnected.mockImplementationOnce(() => new Promise<boolean>((r) => (release = r)));
+    expect(s.service.hasPolled()).toBe(false);
+    s.service.start();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(s.service.hasPolled()).toBe(false);
+    release(false);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(s.service.hasPolled()).toBe(true);
+    s.service.stop();
   });
 
   it('reports the current LAN address and admin port, recomputed on every getState', () => {

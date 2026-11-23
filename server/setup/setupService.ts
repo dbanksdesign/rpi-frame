@@ -7,7 +7,7 @@ import { nextPhase } from './stateMachine';
 import type { SetupPhase, SetupState } from './types';
 
 export const HOTSPOT_SSID = 'PhotoFrame-Setup';
-const MDNS_ADDRESS = 'photoframe.local';
+const DEFAULT_MDNS_HOST = 'photoframe';
 const PASSWORD_ALPHABET = 'ABCDEFGHJKMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789';
 const PASSWORD_LENGTH = 10;
 const TAILSCALE_RETRY_MS = 15_000;
@@ -21,6 +21,8 @@ export interface SetupService {
   stop(): void;
   /** True while the setup hotspot is up; the port-80 portal middleware follows this. */
   isHotspotUp(): boolean;
+  /** False until the first poll has completed (the phase is only a guess before that). */
+  hasPolled(): boolean;
   getState(): SetupState;
   scanNetworks(): Promise<WifiNetwork[]>;
   submitWifi(ssid: string, password: string | null, hidden?: boolean): Promise<void>;
@@ -44,6 +46,14 @@ export interface SetupServiceDeps {
   getLanAddress?: () => string | undefined;
   /** Port the main app is actually reachable on (80 once the port-80 bind succeeds). */
   getAdminPort?: () => 80 | 3000;
+  /** Host name for the <name>.local address (default: os.hostname()). */
+  getHostname?: () => string;
+}
+
+/** `<first label of the host name>.local`, lower-case; photoframe.local if unknown. */
+export function mdnsName(hostname: string): string {
+  const label = hostname.trim().toLowerCase().split('.')[0];
+  return `${/^[a-z0-9][a-z0-9-]*$/.test(label) ? label : DEFAULT_MDNS_HOST}.local`;
 }
 
 async function defaultHasInternet(): Promise<boolean> {
@@ -85,6 +95,7 @@ export function createSetupService(deps: SetupServiceDeps): SetupService {
   // once online, the phase is worked out as on a fresh start.
   let assumedReady = false;
   let hotspotSince = 0;
+  let polledOnce = false;
 
   let sessionPassword: string | null = null;
   let hotspotUp = false;
@@ -117,13 +128,17 @@ export function createSetupService(deps: SetupServiceDeps): SetupService {
       return hotspotUp;
     },
 
+    hasPolled() {
+      return polledOnce;
+    },
+
     getState() {
       const lan = getLan();
       const state: SetupState = {
         phase,
         showOfflineBanner,
         addresses: {
-          mdns: MDNS_ADDRESS,
+          mdns: mdnsName(getHostname()),
           ...(lan ? { lan } : {}),
           ...(tailnet ? { tailnet } : {}),
           adminPort: deps.getAdminPort?.() ?? 3000,
@@ -171,6 +186,14 @@ export function createSetupService(deps: SetupServiceDeps): SetupService {
   function logFailure(what: string, err: unknown) {
     const msg = err instanceof Error ? err.message : 'unknown error';
     console.error(`[setup] ${what} failed: ${msg.replace(/\s+/g, ' ')}`);
+  }
+
+  function getHostname(): string {
+    try {
+      return deps.getHostname ? deps.getHostname() : os.hostname();
+    } catch {
+      return '';
+    }
   }
 
   function getLan(): string | undefined {
@@ -341,6 +364,8 @@ export function createSetupService(deps: SetupServiceDeps): SetupService {
       if (phase === 'READY') lastError = undefined;
     } catch (err) {
       logFailure('poll', err);
+    } finally {
+      polledOnce = true;
     }
   }
 

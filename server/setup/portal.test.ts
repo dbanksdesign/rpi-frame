@@ -10,6 +10,7 @@ function fakeService(): SetupService {
     start: vi.fn(),
     stop: vi.fn(),
     isHotspotUp: vi.fn(() => true),
+    hasPolled: vi.fn(() => true),
     getState: vi.fn(() => ({ phase: 'NO_WIFI', showOfflineBanner: false, addresses: { mdns: 'photoframe.local' } })),
     scanNetworks: vi.fn(async () => [{ ssid: 'Home', signal: 80, secured: true }]),
     submitWifi: vi.fn(async () => {}),

@@ -13,11 +13,12 @@ afterEach(() => {
   server = null;
 });
 
-function fakeService(opts: { phase?: SetupPhase; hotspot?: boolean } = {}) {
+function fakeService(opts: { phase?: SetupPhase; hotspot?: boolean; polled?: boolean } = {}) {
   return {
     start: vi.fn(),
     stop: vi.fn(),
     isHotspotUp: vi.fn(() => opts.hotspot ?? false),
+    hasPolled: vi.fn(() => opts.polled ?? true),
     getState: vi.fn(() => ({ phase: opts.phase ?? 'READY', showOfflineBanner: false, addresses: { mdns: 'photoframe.local', adminPort: 80 } })),
     scanNetworks: vi.fn(async () => [{ ssid: 'Home', signal: 80, secured: true }]),
     submitWifi: vi.fn(async () => {}),
@@ -90,6 +91,22 @@ describe('setup router', () => {
       server?.close();
       server?.closeAllConnections();
     }
+  });
+
+  it('/state answers 503 "starting" until the first poll has completed, then 200', async () => {
+    const service = fakeService({ phase: 'NO_WIFI', polled: false });
+    const base = await boot(createSetupRouter(service));
+    const early = await fetch(`${base}/state`);
+    expect(early.status).toBe(503);
+    expect(await early.json()).toEqual({ error: 'starting' });
+    expect(service.getState).not.toHaveBeenCalled();
+    // and setup is not "active" yet either: no WiFi change before the real phase is known
+    const wifi = await fetch(`${base}/wifi`, { method: 'POST', headers: json, body: JSON.stringify({ ssid: 'Evil' }) });
+    expect(wifi.status).toBe(409);
+    vi.mocked(service.hasPolled).mockReturnValue(true);
+    const later = await fetch(`${base}/state`);
+    expect(later.status).toBe(200);
+    expect((await later.json()).phase).toBe('NO_WIFI');
   });
 
   it('FRAME_SETUP=off router still answers /state with READY', async () => {
