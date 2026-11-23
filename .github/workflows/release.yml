@@ -1,0 +1,58 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+concurrency:
+  group: release-${{ github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    # arm64 runner: production node_modules (sharp) must match the Pi.
+    runs-on: ubuntu-24.04-arm
+    permissions:
+      contents: write
+    steps:
+      # Pinning to full commit SHAs is the stricter option.
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - run: npm ci
+
+      - name: Unit tests
+        run: |
+          npx vitest run
+          bash pi/updater/test/updater.test.sh
+          bash scripts/make-release.test.sh
+
+      - name: Verify tag format
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          if ! [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Tag '$TAG' is not of the form vX.Y.Z" >&2
+            exit 1
+          fi
+
+      - name: Build release assets
+        env:
+          TAG: ${{ github.ref_name }}
+        run: scripts/make-release.sh "$TAG"
+
+      - name: Create GitHub release
+        env:
+          TAG: ${{ github.ref_name }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "$TAG" \
+            "release-out/frame-$TAG.tar.gz" \
+            "release-out/frame-$TAG.tar.gz.sha256" \
+            --title "$TAG" \
+            --generate-notes
