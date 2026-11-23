@@ -1,6 +1,7 @@
 import fs from 'fs';
 import path from 'path';
-import { getProjectRoot } from './filesystem';
+import { getDataRoot } from './paths';
+import { writeJsonAtomic } from './atomicJson';
 
 export interface ImageMetadata {
   id: string;
@@ -19,7 +20,7 @@ export interface Collection {
   createdAt: string;
 }
 
-const DATA_DIR = path.join(getProjectRoot(), 'data');
+const DATA_DIR = path.join(getDataRoot(), 'data');
 const IMAGES_FILE = path.join(DATA_DIR, 'images.json');
 const COLLECTIONS_FILE = path.join(DATA_DIR, 'collections.json');
 
@@ -30,12 +31,12 @@ if (!fs.existsSync(DATA_DIR)) {
 
 // Initialize images file if it doesn't exist
 if (!fs.existsSync(IMAGES_FILE)) {
-  fs.writeFileSync(IMAGES_FILE, JSON.stringify([], null, 2));
+  writeJsonAtomic(IMAGES_FILE, []);
 }
 
 // Initialize collections file if it doesn't exist
 if (!fs.existsSync(COLLECTIONS_FILE)) {
-  fs.writeFileSync(COLLECTIONS_FILE, JSON.stringify([], null, 2));
+  writeJsonAtomic(COLLECTIONS_FILE, []);
 }
 
 export function getImages(): ImageMetadata[] {
@@ -49,7 +50,7 @@ export function getImages(): ImageMetadata[] {
 }
 
 export function saveImages(images: ImageMetadata[]): void {
-  fs.writeFileSync(IMAGES_FILE, JSON.stringify(images, null, 2));
+  writeJsonAtomic(IMAGES_FILE, images);
 }
 
 export function addImage(image: ImageMetadata): void {
@@ -99,7 +100,7 @@ export function getCollections(): Collection[] {
 }
 
 export function saveCollections(collections: Collection[]): void {
-  fs.writeFileSync(COLLECTIONS_FILE, JSON.stringify(collections, null, 2));
+  writeJsonAtomic(COLLECTIONS_FILE, collections);
 }
 
 export function addCollection(collection: Collection): void {
@@ -212,7 +213,7 @@ export function getSlideshowState(): SlideshowState {
 
 export function saveSlideshowState(state: SlideshowState): void {
   try {
-    fs.writeFileSync(STATE_FILE, JSON.stringify(state, null, 2));
+    writeJsonAtomic(STATE_FILE, state);
   } catch (error) {
     console.error('Error saving slideshow state:', error);
   }

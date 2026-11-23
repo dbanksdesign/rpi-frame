@@ -24,7 +24,7 @@ import {
   removeImageFromCollection,
   setActiveCollection
 } from '../utils/imageStore';
-import { getProjectRoot } from '../utils/filesystem';
+import { getDataRoot } from '../utils/paths';
 import { broadcastImagesUpdated, broadcastStateUpdated, broadcastCollectionsUpdated } from '../utils/websocket';
 
 const execPromise = promisify(exec);
@@ -32,7 +32,7 @@ const execPromise = promisify(exec);
 export const router = express.Router();
 
 // Configure multer for file uploads
-const uploadsDir = path.join(getProjectRoot(), 'uploads');
+const uploadsDir = path.join(getDataRoot(), 'uploads');
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
     cb(null, uploadsDir);
@@ -319,7 +319,7 @@ router.delete('/images/:id', (req: Request, res: Response) => {
     }
 
     // Delete file from filesystem
-    const filePath = path.join(getProjectRoot(), 'uploads', image.filename);
+    const filePath = path.join(getDataRoot(), 'uploads', image.filename);
     if (fs.existsSync(filePath)) {
       fs.unlinkSync(filePath);
     }

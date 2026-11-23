@@ -1,5 +1,6 @@
 import fs from 'fs';
 import path from 'path';
+import { getDataRoot } from './paths';
 
 // Get the project root directory (works in both dev and production)
 export function getProjectRoot(): string {
@@ -11,13 +12,13 @@ export function getProjectRoot(): string {
 }
 
 export function ensureDirectories(): void {
-  const projectRoot = getProjectRoot();
+  const dataRoot = getDataRoot();
   const directories = [
-    path.join(projectRoot, 'uploads'),
-    path.join(projectRoot, 'data')
+    path.join(dataRoot, 'uploads'),
+    path.join(dataRoot, 'data')
   ];
 
-  console.log('Project root:', projectRoot);
+  console.log('Data root:', dataRoot);
   directories.forEach(dir => {
     if (!fs.existsSync(dir)) {
       fs.mkdirSync(dir, { recursive: true });

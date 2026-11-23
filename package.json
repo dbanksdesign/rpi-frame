@@ -4,6 +4,7 @@
   "description": "Digital photo frame web application for Raspberry Pi",
   "main": "dist/server/index.js",
   "scripts": {
+    "test": "vitest run",
     "dev": "concurrently \"npm run dev:server\" \"npm run dev:client\"",
     "dev:server": "nodemon --watch server --ext ts --exec tsx server/index.ts",
     "dev:client": "vite",
@@ -53,6 +54,7 @@
     "react-dom": "^18.2.0",
     "tsx": "^4.7.0",
     "typescript": "^5.3.3",
-    "vite": "^5.0.8"
+    "vite": "^5.0.8",
+    "vitest": "^2.1.9"
   }
 }

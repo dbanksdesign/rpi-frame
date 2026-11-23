@@ -4,7 +4,8 @@ import path from 'path';
 import fs from 'fs';
 import { createServer } from 'http';
 import { router as apiRouter } from './routes/api';
-import { ensureDirectories, getProjectRoot } from './utils/filesystem';
+import { ensureDirectories } from './utils/filesystem';
+import { getDataRoot } from './utils/paths';
 import { initWebSocketServer } from './utils/websocket';
 
 const app = express();
@@ -22,7 +23,7 @@ app.use(express.json());
 ensureDirectories();
 
 // Serve uploaded images statically
-const uploadsPath = path.join(getProjectRoot(), 'uploads');
+const uploadsPath = path.join(getDataRoot(), 'uploads');
 console.log('Serving uploads from:', uploadsPath);
 app.use('/uploads', express.static(uploadsPath));
 
