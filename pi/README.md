@@ -85,17 +85,13 @@ without `$SUDO_USER`, because the owner key must go to a real login user.
    ./pi/install.sh --owner-key ~/owner.pub --name photoframe
    ```
    Run it from the LAN, not over Tailscale: the first run restarts `tailscaled`.
-4. **Before handing it over**, remove your own traces:
-   - **WiFi:** `nmcli -t -f NAME,TYPE connection show`, then `sudo nmcli connection delete '<name>'`.
-   - **Tailscale:** `sudo tailscale logout`, if you ever logged the frame into your own account.
-   - **Test photos:** delete them on the admin page. They are stored in `/data/uploads`.
+4. `sudo reboot`, then test it on your own WiFi, Tailscale and photos. When it works, see
+   "Handing the frame over" below.
 
-   These deletions are permanent even with the overlay on. On the first install the installer
-   moves the existing profiles and Tailscale state to `/data`, then deletes the originals from
-   the root filesystem. It deletes each original only once an identical copy is on `/data`. If
-   it keeps one (no identical copy), it prints a WARNING naming the file: delete that file by
-   hand.
-5. `sudo reboot`.
+   On the first install the installer moves the existing WiFi profiles and Tailscale state to
+   `/data`, then deletes the originals from the root filesystem. It deletes each original only
+   once an identical copy is on `/data`. If it keeps one (no identical copy), it prints a
+   WARNING naming the file: delete that file by hand.
 
 ### One-time manual step: the FRAMEDATA partition
 
@@ -113,6 +109,30 @@ Without a partition, the installer still works: `/data` becomes a plain director
 stays off, and it prints these steps. If `/data` was a plain directory before, the installer
 refuses to mount a new partition over it. Move it aside first (`sudo mv /data /data.old`),
 re-run, then copy `uploads/` and `data/` back.
+
+## Handing the frame over
+
+When the frame is ready to give away, run this on it (over SSH on the LAN or at a keyboard):
+
+```
+sudo ./pi/prepare-handoff.sh --dry-run --clear-photos     # review the plan, changes nothing
+sudo ./pi/prepare-handoff.sh --clear-photos               # or --keep-photos
+```
+
+Exactly one of `--clear-photos` (delete everything in `/data/uploads` and reset the slideshow)
+or `--keep-photos` (the photos are the gift) is required. It lists what it will remove and asks
+you to type `handoff` (skip with `--yes`). It then stops the server, clears the update status,
+power log and journal, logs Tailscale out and wipes its saved identity, deletes every saved WiFi
+profile (the `Hotspot` one too), syncs and powers the frame off. The WiFi step is last because
+it drops an SSH session that runs over WiFi. Other flags: `--no-shutdown`, `--force` (run on a
+machine that does not look installer-built), `--dry-run`. Running it again is harmless.
+
+It keeps your SSH key, the installed release, and Ethernet profiles. The deletions are
+permanent even with the overlay on, because they live on `/data`. Afterwards, delete the frame
+from your Tailscale admin console (`https://login.tailscale.com/admin/machines`): logging out
+does not always remove it. Once the brother has joined Tailscale and shared the frame, you keep
+remote access with your SSH key and the admin page; you do not need to do anything else.
+Unplug it only after the green LED stops flashing.
 
 ## First boot (the brother)
 

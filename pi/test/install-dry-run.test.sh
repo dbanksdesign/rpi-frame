@@ -304,8 +304,9 @@ assert_contains "$TS_BIND" "x-systemd.before=tailscaled.service" "Tailscale bind
 assert_contains "$NM_BIND" "nofail" "NM bind still nofail"
 assert_contains "$OUT" "delete originals under /etc/NetworkManager/system-connections" "NM originals removed from root"
 assert_contains "$OUT" "delete originals under /var/lib/tailscale" "Tailscale originals removed from root"
-assert_contains "$OUT" "sudo tailscale logout" "handoff note: tailscale logout"
-assert_contains "$OUT" "test photos" "handoff note: test photos"
+assert_contains "$OUT" "sudo ./pi/prepare-handoff.sh --clear-photos|--keep-photos" "handoff note: prepare-handoff"
+assert_contains "$OUT" "admin page: http://photoframe.local/" "summary admin URL is port 80"
+assert_not_contains "$OUT" "photoframe.local:3000" "summary no longer prints :3000"
 assert_contains "$OUT" "overlayroot=tmpfs:recurse=0" "overlay must not recurse into /data"
 run_install --dry-run --owner-key "$FIX/owner.pub" --writable
 assert_contains "$OUT" "remove every overlayroot=tmpfs token" "--writable strips every overlay token"

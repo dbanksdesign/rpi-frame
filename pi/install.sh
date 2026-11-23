@@ -1169,13 +1169,9 @@ step_overlay() {
 
 summary() {
   printf '\nDone%s.\n' "$([[ $DRY -eq 1 ]] && echo ' (dry run: nothing was changed)')"
-  say "Frame: $NAME   admin page: http://$NAME.local:3000/ (or its Tailscale name)"
+  say "Frame: $NAME   admin page: http://$NAME.local/ (or its Tailscale name)"
   say "SSH:   ssh $INSTALL_USER@$NAME.local (key only), also over Tailscale once shared"
-  say "Before giving the frame away, remove your own traces (they live on $DATA, which survives"
-  say "the overlay, so these deletions are permanent):"
-  say "  WiFi:      nmcli -t -f NAME,TYPE connection show   then   sudo nmcli connection delete '<name>'"
-  say "  Tailscale: sudo tailscale logout   (only if you logged the frame in yourself)"
-  say "  test photos: delete them on the admin page (they are stored in $DATA/uploads)"
+  say "When the frame is ready to give away, run: sudo ./pi/prepare-handoff.sh --clear-photos|--keep-photos"
   if [[ $DRY -eq 0 ]]; then
     say "Reboot now to start the kiosk: sudo reboot   (the installer never reboots by itself)"
   else
