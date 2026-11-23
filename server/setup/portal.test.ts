@@ -115,6 +115,21 @@ describe('portal', () => {
     expect(service.submitWifi).not.toHaveBeenCalled();
   });
 
+  it('its /wifi and /networks handlers re-check that setup is active (409 otherwise)', async () => {
+    const service = fakeService();
+    vi.mocked(service.getState).mockReturnValue({ phase: 'READY', showOfflineBanner: false, addresses: { mdns: 'photoframe.local', adminPort: 80 } });
+    // up for the portal's own gate, already down when the handler runs
+    vi.mocked(service.isHotspotUp).mockReturnValueOnce(true).mockReturnValueOnce(false);
+    const { base } = await boot(service);
+    const res = await fetch(base + '/wifi', { method: 'POST', headers: json, body: JSON.stringify({ ssid: 'Home', password: 'pw' }) });
+    expect(res.status).toBe(409);
+    expect(await res.json()).toEqual({ error: 'Setup is not active' });
+    expect(service.submitWifi).not.toHaveBeenCalled();
+    vi.mocked(service.isHotspotUp).mockReturnValueOnce(true).mockReturnValueOnce(false);
+    expect((await fetch(base + '/networks')).status).toBe(409);
+    expect(service.scanNetworks).not.toHaveBeenCalled();
+  });
+
   it('follows the hotspot state on the same app', async () => {
     const service = fakeService();
     const up = vi.mocked(service.isHotspotUp);

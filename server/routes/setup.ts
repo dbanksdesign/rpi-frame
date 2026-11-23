@@ -1,9 +1,14 @@
 import express, { Router, type NextFunction, type Request, type Response } from 'express';
 import type { SetupService } from '../setup/setupService';
-import { parseWifiRequest } from '../setup/wifiRequest';
+import { isSetupActive, parseWifiRequest, SETUP_INACTIVE } from '../setup/wifiRequest';
 
 export function createSetupRouter(service: SetupService): Router {
   const router = Router();
+  // Outside setup, refuse before the body is even parsed.
+  router.use(['/wifi', '/networks'], (_req, res, next) => {
+    if (isSetupActive(service)) return next();
+    res.status(409).json(SETUP_INACTIVE);
+  });
   // Own parser + error handler so a malformed body (which may hold a typed WiFi
   // password) is never echoed or logged by Express's default handler. Mount this
   // router before any global express.json().

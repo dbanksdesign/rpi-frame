@@ -1,6 +1,6 @@
 import express from 'express';
 import type { SetupService } from './setupService';
-import { parseWifiRequest } from './wifiRequest';
+import { isSetupActive, parseWifiRequest, SETUP_INACTIVE } from './wifiRequest';
 
 const GATEWAY_URL = 'http://10.42.0.1/';
 
@@ -84,11 +84,17 @@ export function createPortalMiddleware(service: SetupService): express.Router {
     res.type('html').send(PAGE);
   });
 
-  router.get('/networks', async (_req, res) => {
+  // Same guard as the /api/setup router (the gate above normally implies it).
+  const setupOnly: express.RequestHandler = (_req, res, next) => {
+    if (isSetupActive(service)) return next();
+    res.status(409).json(SETUP_INACTIVE);
+  };
+
+  router.get('/networks', setupOnly, async (_req, res) => {
     res.json(await service.scanNetworks());
   });
 
-  router.post('/wifi', express.json({ limit: '4kb' }), (req, res) => {
+  router.post('/wifi', setupOnly, express.json({ limit: '4kb' }), (req, res) => {
     const parsed = parseWifiRequest(req.body);
     if (!parsed) {
       res.status(400).json({ error: 'Invalid WiFi details' });
