@@ -481,7 +481,7 @@ step_preflight() {
   command -v raspi-config > /dev/null 2>&1 || die "raspi-config is missing; use Raspberry Pi OS (64-bit, with desktop)"
   [[ -d /etc/lightdm && -f "/usr/share/xsessions/$XSESSION.desktop" ]] \
     || die "the desktop session $XSESSION is missing; use Raspberry Pi OS with desktop (not Lite)"
-  for f in "$REPO/start.sh" "$HERE/updater/frame-update.sh" "$HERE/units/$SERVER_UNIT"; do
+  for f in "$REPO/start.sh" "$HERE/updater/frame-update.sh" "$HERE/units/$SERVER_UNIT" "$HERE/units/tailscale-operator.sh"; do
     [[ -f "$f" ]] || die "missing $f; run the installer from a complete checkout"
   done
   if cmdline_has_overlay "$(cat /proc/cmdline)"; then
@@ -877,6 +877,7 @@ step_units() {
   if [[ $SKIP_TO_OVERLAY -eq 1 ]]; then skipped; return 0; fi
   ensure_dir "$LIB_DIR" 0755 root:root
   copy_file "$HERE/units/$SERVER_UNIT" "/etc/systemd/system/$SERVER_UNIT" 0644 root:root
+  copy_file "$HERE/units/tailscale-operator.sh" "$LIB_DIR/tailscale-operator.sh" 0755 root:root
   copy_file "$HERE/power-log.sh" "$LIB_DIR/power-log.sh" 0755 root:root
   copy_file "$HERE/units/power-log.service" /etc/systemd/system/power-log.service 0644 root:root
   ensure_dir /etc/systemd/system.conf.d 0755 root:root

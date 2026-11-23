@@ -9,6 +9,11 @@ RequiresMountsFor=/data
 User=frame
 Group=frame
 WorkingDirectory=/data/current
+# Re-assert `tailscale set --operator=frame` (a tailscaled pref that a handoff
+# or `tailscale logout` can clear) so the server may run `tailscale up`.
+# '+' runs it as root despite User=frame; '-' means a failure never blocks the
+# start (the helper also always exits 0).
+ExecStartPre=+-/usr/local/lib/photo-frame/tailscale-operator.sh
 ExecStart=/usr/bin/node /data/current/dist/server/index.js
 Environment=NODE_ENV=production PORT=3000 FRAME_DATA_DIR=/data
 # The captive portal listens on port 80 while the setup hotspot is up.

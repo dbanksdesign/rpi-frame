@@ -172,6 +172,11 @@ come back here after it).
   later: `sudo tailscale logout`, then `sudo systemctl restart photo-frame-server` or reboot. The
   screen only appears when the server starts not-yet-ready; after the ready card, a logout alone
   changes nothing on screen.)
+- [ ] Operator survives a logout (SPARE PI ONLY): `sudo tailscale logout`, then
+  `sudo systemctl restart photo-frame-server`. `tailscale debug prefs | grep -i operator` still
+  shows `frame` (verify the key name), `journalctl -u photo-frame-server -b | grep tailscale-operator`
+  shows "operator is frame" (the unit's `ExecStartPre` helper re-sets it on every start), and the
+  login QR appears on the LCD again within about 30 s.
 - [ ] Scan the QR with a phone and sign in to the **brother** tailnet. The screen then shows the
   "You're all set" card (its contents are checked in section 4), and after 60 s (or a tap) the slideshow.
 - [ ] The text "Afterwards, share this frame with the person who set it up: Tailscale admin
@@ -190,7 +195,9 @@ come back here after it).
 
 > **If this fails:** the login URL never appears: `journalctl -u photo-frame-server -b | grep -i tailscale`,
 > `server/setup/tailscale.ts` (`tailscale up` is run as `frame`),
-> `tailscale set --operator=frame` (installer step 3), `pi/units/photo-frame-server.service`.
+> `tailscale set --operator=frame` (installer step 3, and `/usr/local/lib/photo-frame/tailscale-operator.sh`
+> from `pi/units/tailscale-operator.sh`, run by the unit's `ExecStartPre`), `pi/units/photo-frame-server.service`.
+> "Access denied: checkprefs access denied" in the journal means the operator is not set.
 
 ---
 
@@ -444,6 +451,13 @@ SPARE PI ONLY (this wipes it). Run at a keyboard or over SSH on the **LAN**, nev
   (`https://login.tailscale.com/admin/machines`). Logging out does not always remove it.
 - [ ] The photo-frame server still starts after the wipe: join WiFi through the setup page, the
   slideshow (empty or with the kept photos) comes up.
+- [ ] **Tailscale login after the handoff** (this is where the operator setting matters): boot the
+  handed-off frame on a **different** WiFi than the one used before (a phone hotspot works), join
+  it through the setup page, and confirm the "Connect your frame to Tailscale" QR code **actually
+  appears** (not stuck on "Getting a sign-in link…" or "Could not get a Tailscale login link
+  yet") and that signing in with it works and reaches the "You're all set" card. The log of the
+  handoff (`/run/prepare-handoff.log`, before the power-off) contains the `tailscale set
+  --operator=frame` or `tailscale-operator.sh` line in step 5.
 
 ---
 

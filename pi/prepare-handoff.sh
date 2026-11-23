@@ -13,7 +13,8 @@
 #   - with --clear-photos: uploads/* and the image / collection / slideshow
 #     state (reset to what the server creates on first run)
 #   - update-status.json, the power log, the journal (best effort)
-#   - the Tailscale login (tailscale logout, then state/ and certs wiped)
+#   - the Tailscale login (tailscale logout, then state/ and certs wiped; the
+#     operator setting the server needs is then set again on the fresh state)
 #   - EVERY saved WiFi profile (including the Hotspot one) -- last, because it
 #     drops an SSH session that runs over WiFi
 # It keeps: your SSH authorized key, /data/releases, /data/current, sudoers,
@@ -29,6 +30,8 @@
 #   ignored, so losing the terminal (SSH over WiFi drops when the WiFi profiles are
 #   deleted) never stops the run before poweroff. It may not be under /data or
 #   FRAME_DATA_DIR. A background `tail -f` keeps showing it while the terminal lives.
+#   FRAME_HANDOFF_TAILSCALE_TIMEOUT (default 10) -- seconds one `tailscale status`
+#   or `tailscale set` may take before it is treated as failed.
 #   FRAME_HANDOFF_TEST_ALLOW_NONROOT=1 (tests only) lets a non-root user run for
 #   real; it is refused for the default /data.
 #
@@ -38,6 +41,9 @@ set -euo pipefail
 
 TOTAL_STEPS=7
 SERVER_UNIT="photo-frame-server.service"
+FRAME_USER="frame"
+# Installed by install.sh; the server unit also runs it before every start.
+OPERATOR_HELPER="/usr/local/lib/photo-frame/tailscale-operator.sh"
 SAFE_WORD_RE='^[][A-Za-z0-9_./:=@%+,#*-]+$'
 UUID_RE='^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}$'
 SLIDESHOW_DEFAULT='{
@@ -58,6 +64,9 @@ WIFI_NAMES=()
 WIFI_BAD=0
 LOG="${FRAME_HANDOFF_LOG-/run/prepare-handoff.log}"
 TAIL_PID=
+# Seconds a single tailscale query may take (a hung daemon must not block the run).
+TS_TIMEOUT="${FRAME_HANDOFF_TAILSCALE_TIMEOUT:-10}"
+OPERATOR_TRIES=10
 
 # ---- output helpers ----------------------------------------------------------
 step() { printf '\n[%s/%s] %s\n' "$1" "$TOTAL_STEPS" "$2"; }
@@ -170,6 +179,7 @@ validate_data_dir() {
       usage_error "FRAME_DATA_DIR resolves to a system directory ($DATA_REAL); refusing" ;;
   esac
   if [[ -z "$DATA_REAL" ]]; then usage_error "FRAME_DATA_DIR resolved to nothing"; fi
+  if ! [[ "$TS_TIMEOUT" =~ ^[1-9][0-9]{0,2}$ ]]; then usage_error "FRAME_HANDOFF_TAILSCALE_TIMEOUT must be a whole number of seconds (1-999)"; fi
   if [[ "${FRAME_HANDOFF_TEST_ALLOW_NONROOT:-}" == 1 && "$DATA_REAL" == /data ]]; then
     usage_error "FRAME_HANDOFF_TEST_ALLOW_NONROOT must never be combined with the real /data"
   fi
@@ -459,8 +469,41 @@ step_tailscale() {
   fi
   soft systemctl stop tailscaled
   clear_dir_contents "$DATA_REAL/system/tailscale" "tailscale state"
+  reassert_operator
   say "REMINDER: delete this machine from your Tailscale admin console too"
   say "(https://login.tailscale.com/admin/machines); logout does not always remove it."
+}
+
+# reassert_operator: the cleared state held the `tailscale set --operator=frame`
+# pref; without it the next owner's frame cannot run `tailscale up` as frame and
+# the login QR never appears. Start tailscaled on the fresh (logged-out) state,
+# set it again, stop it again. Best effort: never stops the handoff.
+reassert_operator() {
+  local i done=0
+  say "set the Tailscale operator ($FRAME_USER) again on the fresh state, so the next owner can log in"
+  if [[ $DRY -eq 1 ]]; then
+    run systemctl start tailscaled
+    run tailscale set "--operator=$FRAME_USER"
+    run systemctl stop tailscaled
+    return 0
+  fi
+  if ! command -v tailscale > /dev/null 2>&1; then
+    warn "tailscale not found; operator not set (the server sets it again on every start)"
+    return 0
+  fi
+  soft systemctl start tailscaled
+  if [[ -x "$OPERATOR_HELPER" && ! -L "$OPERATOR_HELPER" ]]; then
+    printf '    $ %s\n' "$OPERATOR_HELPER"
+    with_timeout 30 "$OPERATOR_HELPER" && done=1
+  else
+    printf '    $ %s\n' "$(qcmd tailscale set "--operator=$FRAME_USER")"
+    for ((i = 0; i < OPERATOR_TRIES; i++)); do
+      if with_timeout "$TS_TIMEOUT" tailscale set "--operator=$FRAME_USER" > /dev/null 2>&1; then done=1; break; fi
+      sleep 1
+    done
+  fi
+  if [[ $done -ne 1 ]]; then warn "could not set the Tailscale operator (ignored; the server tries again on every start)"; fi
+  soft systemctl stop tailscaled
 }
 
 step_wifi() {

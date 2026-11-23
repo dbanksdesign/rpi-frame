@@ -357,8 +357,52 @@ for f in home.nmconnection differs.nmconnection sub/tailscaled.state brother.nmc
   present "$MV/dst/$f" "copy $f must never be deleted"
 done
 
+# ---- 8c. Tailscale operator helper (ExecStartPre=+-, root) ------------------------
+OPH="$PI/units/tailscale-operator.sh"
+if [[ -f "$OPH" && -x "$OPH" ]]; then ok; else bad "missing or non-executable $OPH"; fi
+assert_contains "$FIRST" "install pi/units/tailscale-operator.sh -> /usr/local/lib/photo-frame/tailscale-operator.sh (root:root 0755)" "installer installs the operator helper"
+if grep -qxF "ExecStartPre=+-/usr/local/lib/photo-frame/tailscale-operator.sh" "$SERVER_UNIT"; then ok; else bad "server unit re-asserts the Tailscale operator before every start"; fi
+OPB="$ROOT/opbin"
+mkdir -p "$OPB"
+# stub tailscale: fails until $OP_STATE/fails is down to 0, records argv
+cat > "$OPB/tailscale" << 'STUB'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$OP_STATE/calls"
+n="$(cat "$OP_STATE/fails" 2> /dev/null || echo 0)"
+if [[ "$n" -gt 0 ]]; then echo $((n - 1)) > "$OP_STATE/fails"; echo "tskey-NOT-PRINTED" >&2; exit 1; fi
+exit 0
+STUB
+printf '#!/usr/bin/env bash\nexit 0\n' > "$OPB/sleep"
+chmod +x "$OPB/tailscale" "$OPB/sleep"
+run_op() { # <fails> [env...]
+  OP_STATE="$(mktemp -d "$ROOT/op.XXXXXX")"
+  echo "$1" > "$OP_STATE/fails"
+  shift
+  OUT="$(env OP_STATE="$OP_STATE" PATH="$OPB:/usr/bin:/bin" "$@" bash "$OPH" 2>&1)"
+  RC=$?
+  OPCALLS="$(cat "$OP_STATE/calls" 2> /dev/null || true)"
+}
+run_op 0
+assert_eq "$RC" 0 "operator helper exit (daemon ready)"
+assert_eq "$OPCALLS" "set --operator=frame" "operator helper sets the operator once"
+run_op 3
+assert_eq "$RC" 0 "operator helper exit (daemon slow)"
+assert_eq "$(printf '%s\n' "$OPCALLS" | grep -c -x 'set --operator=frame')" 4 "operator helper retries until tailscaled answers"
+run_op 1000
+assert_eq "$RC" 0 "operator helper never fails the unit"
+n_calls="$(printf '%s\n' "$OPCALLS" | grep -c .)"
+if [[ "$n_calls" -ge 10 && "$n_calls" -le 20 ]]; then ok; else bad "operator helper gives up after ~15 tries (got $n_calls)"; fi
+assert_not_contains "$OUT" "tskey-NOT-PRINTED" "operator helper prints no tailscale output"
+run_op 0 FRAME_TAILSCALE_OPERATOR=tester
+assert_eq "$OPCALLS" "set --operator=tester" "operator name overridable for tests"
+run_op 0 'FRAME_TAILSCALE_OPERATOR=x;reboot'
+assert_eq "$OPCALLS" "" "bad operator name refused"
+assert_eq "$RC" 0 "bad operator name still exits 0"
+OUT="$(env PATH="/nonexistent" /bin/bash "$OPH" 2>&1)"
+assert_eq "$?" 0 "operator helper exits 0 without tailscale"
+
 # ---- 9. scripts parse -----------------------------------------------------------
-for s in "$INSTALL" "$PI/power-log.sh"; do
+for s in "$INSTALL" "$PI/power-log.sh" "$OPH"; do
   if bash -n "$s"; then ok; else bad "bash -n $s"; fi
 done
 if grep -q '/home/djb' "$PI/power-log.sh"; then bad "power-log.sh references /home/djb"; else ok; fi

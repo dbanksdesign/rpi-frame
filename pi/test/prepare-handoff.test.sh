@@ -47,6 +47,7 @@ case "$1" in
   logout)
     if [[ -n "${STUB_HUP_PIDFILE:-}" ]]; then kill -HUP "$(cat "$STUB_HUP_PIDFILE")"; sleep 1; fi
     rm -f "$STUB_STATE/ts-loggedin"; exit 0 ;;
+  set) [[ -f "$STUB_STATE/ts-set-fails" ]] && exit 1; exit 0 ;;
 esac
 exit 0'
 make_stub systemctl 'exit 0'
@@ -175,6 +176,8 @@ nm_pos="${OUT%%nmcli connection delete*}"
 po_pos="${OUT%%systemctl poweroff*}"
 if [[ ${#ts_pos} -lt ${#nm_pos} && ${#nm_pos} -lt ${#po_pos} ]]; then ok; else bad "dry-run: tailscale logout < nmcli delete < poweroff"; fi
 assert_contains "$OUT" "SSH session" "dry-run warns that SSH over WiFi drops"
+assert_contains "$OUT" "systemctl start tailscaled" "dry-run restarts tailscaled after clearing its state"
+assert_contains "$OUT" "tailscale set --operator=frame" "dry-run re-asserts the Tailscale operator"
 assert_eq "$(calls)" "" "dry-run runs no commands at all"
 assert_eq "$(tree)" "$before" "dry-run changes nothing"
 run_ph --dry-run --keep-photos --no-shutdown
@@ -239,6 +242,16 @@ if [[ -n "$l_srv" && -n "$l_logout" && -n "$l_tsstop" && -n "$l_del" && -n "$l_s
   ok
 else
   bad "call order: server stop < ts logout < tailscaled stop < nmcli delete < sync < poweroff ($l_srv $l_logout $l_tsstop $l_del $l_sync $l_off)"
+fi
+# the cleared Tailscale state held the operator pref: start tailscaled, re-set it, stop again
+l_tsstart="$(line_of "systemctl [start] [tailscaled]")"
+l_oper="$(line_of "tailscale [set] [--operator=frame]")"
+l_tsstop2="$(calls | grep -n -F "systemctl [stop] [tailscaled]" | sed -n 2p | cut -d: -f1)"
+if [[ -n "$l_tsstart" && -n "$l_oper" && -n "$l_tsstop2" \
+  && "$l_tsstop" -lt "$l_tsstart" && "$l_tsstart" -lt "$l_oper" && "$l_oper" -lt "$l_tsstop2" && "$l_tsstop2" -lt "$l_del" ]]; then
+  ok
+else
+  bad "operator re-assert: tailscaled stop < start < set --operator=frame < stop < nmcli delete ($l_tsstop $l_tsstart $l_oper $l_tsstop2 $l_del)"
 fi
 # last nmcli list (verification) comes after the deletes
 last_list="$(calls | grep -n -F "nmcli [-t]" | tail -1 | cut -d: -f1)"
@@ -311,6 +324,18 @@ for lp in "$DATA/h.log" "/data/h.log" "relative.log" ""; do
     bash "$SCRIPT" --dry-run --yes --keep-photos 2>&1 < /dev/null)"
   assert_eq "$?" 2 "bad FRAME_HANDOFF_LOG [$lp]"
 done
+
+# ---- 5c. the operator re-assert is best effort ---------------------------------------------
+new_sandbox
+: > "$STUB_STATE/ts-set-fails"
+printf '#!/usr/bin/env bash\nexit 0\n' > "$BIN/sleep"; chmod +x "$BIN/sleep"
+run_ph --yes --keep-photos
+rm -f "$BIN/sleep"
+assert_eq "$(calls | grep -c -F "tailscale [set] [--operator=frame]")" 10 "operator re-assert retried 10 times"
+assert_eq "$RC" 0 "operator re-assert failing: still exit 0 (output: $OUT)"
+assert_contains "$(cat "$SB/handoff.log")" "could not set the Tailscale operator" "operator failure is reported"
+assert_eq "$(calls | tail -1)" "systemctl [poweroff]" "operator failure: poweroff still last"
+assert_eq "$(calls | grep -c -F "systemctl [stop] [tailscaled]")" 2 "operator failure: tailscaled stopped again"
 
 # ---- 6. safety: unsafe layouts and failures ----------------------------------------------
 new_sandbox
