@@ -59,6 +59,22 @@ describe('portal', () => {
     expect(await res.json()).toEqual([{ ssid: 'Home', signal: 80, secured: true }]);
   });
 
+  it('malformed JSON returns 400 and logs neither body nor stack', async () => {
+    const spies = [
+      vi.spyOn(console, 'error').mockImplementation(() => {}),
+      vi.spyOn(console, 'warn').mockImplementation(() => {}),
+      vi.spyOn(console, 'log').mockImplementation(() => {}),
+    ];
+    const { base } = await boot();
+    const res = await fetch(base + '/wifi', { method: 'POST', headers: json, body: '{"ssid":"Home","password":"typed-secret-pw"' });
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({ error: 'Invalid request' });
+    const logged = spies.flatMap((s) => s.mock.calls).map((c) => c.map(String).join(' ')).join('\n');
+    spies.forEach((s) => s.mockRestore());
+    expect(logged).not.toContain('typed-secret-pw');
+    expect(logged).not.toContain('    at ');
+  });
+
   it('POST /wifi validates and returns 202', async () => {
     const { base, service } = await boot();
     const bad = await fetch(base + '/wifi', { method: 'POST', headers: json, body: JSON.stringify({ ssid: '' }) });

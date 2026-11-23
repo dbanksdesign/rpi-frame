@@ -96,6 +96,13 @@ export function startPortal(service: SetupService, port = 80): PortalHandle {
     res.redirect(302, GATEWAY_URL);
   });
 
+  // Never let Express log a body-parse error (it may quote the typed password).
+  app.use((err: unknown, _req: express.Request, res: express.Response, next: express.NextFunction) => {
+    if (!err) return next();
+    console.error('[portal] rejected a malformed request body');
+    res.status(400).json({ error: 'Invalid request' });
+  });
+
   const handle: PortalHandle = { port, close: () => {} };
   const server = app.listen(port, '0.0.0.0', () => {
     const addr = server.address();

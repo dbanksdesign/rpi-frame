@@ -24,7 +24,6 @@ initWebSocketServer(server);
 
 // Middleware
 app.use(cors());
-app.use(express.json());
 
 // Ensure required directories exist
 ensureDirectories();
@@ -54,6 +53,10 @@ if (process.env.FRAME_SETUP === 'off') {
   app.use('/api/setup', createSetupRouter(setupService));
   setupService.start();
 }
+
+// Global JSON parser goes after the setup router, which has its own parser and
+// error handler (a malformed WiFi body must not reach Express's default logger).
+app.use(express.json());
 
 // API routes
 app.use('/api', apiRouter);

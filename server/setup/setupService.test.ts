@@ -45,8 +45,15 @@ function setup(opts: { grace?: number } = {}) {
 }
 
 describe('setupService', () => {
-  beforeEach(() => vi.useFakeTimers());
-  afterEach(() => vi.useRealTimers());
+  let errSpy: ReturnType<typeof vi.spyOn>;
+  beforeEach(() => {
+    vi.useFakeTimers();
+    errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    errSpy.mockRestore();
+  });
 
   it('starts hotspot with random password in NO_WIFI and opens portal', async () => {
     const s = setup();
@@ -176,6 +183,114 @@ describe('setupService', () => {
     await s.tick();
     await s.tick();
     expect(s.service.getState().phase).toBe('NO_WIFI');
+    s.service.stop();
+  });
+
+  it('does not drop a submit that arrives mid-poll; submits run in order after the poll', async () => {
+    const s = setup();
+    let release!: (v: boolean) => void;
+    s.wifi.isConnected.mockImplementationOnce(() => new Promise<boolean>((r) => (release = r)));
+    s.service.start(); // first poll is held on isConnected
+    const p1 = s.service.submitWifi('First', 'pw1', false);
+    const p2 = s.service.submitWifi('Second', 'pw2', false);
+    await Promise.resolve();
+    expect(s.wifi.connect).not.toHaveBeenCalled();
+    release(false);
+    await vi.advanceTimersByTimeAsync(0);
+    await p1;
+    await p2;
+    expect(s.wifi.connect).toHaveBeenNthCalledWith(1, 'First', 'pw1', false);
+    expect(s.wifi.connect).toHaveBeenNthCalledWith(2, 'Second', 'pw2', false);
+    s.service.stop();
+  });
+
+  it('polls skip while a submit is pending', async () => {
+    const s = setup();
+    s.service.start();
+    await s.tick();
+    let release!: () => void;
+    s.wifi.connect.mockImplementationOnce(() => new Promise<void>((r) => (release = r)));
+    const p = s.service.submitWifi('Home', 'pw', false);
+    await vi.advanceTimersByTimeAsync(0);
+    const calls = s.wifi.isConnected.mock.calls.length;
+    await s.tick(5000);
+    expect(s.wifi.isConnected.mock.calls.length).toBe(calls);
+    release();
+    await p;
+    s.service.stop();
+  });
+
+  it('logs one line with adapter name and message per failure', async () => {
+    const lineFor = (name: string) => errSpy.mock.calls.map((c) => String(c[0])).filter((l) => l.includes(name));
+
+    const a = setup();
+    a.wifi.isConnected.mockRejectedValueOnce(new Error('isc boom'));
+    a.service.start();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(errSpy.mock.calls.every((c) => c.length === 1)).toBe(true);
+    expect(lineFor('wifi.isConnected')).toHaveLength(1);
+    expect(lineFor('wifi.isConnected')[0]).toContain('isc boom');
+    a.service.stop();
+
+    errSpy.mockClear();
+    const b = setup();
+    b.wifi.startHotspot.mockRejectedValueOnce(new Error('hs boom'));
+    b.service.start();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(lineFor('wifi.startHotspot')).toHaveLength(1);
+    expect(lineFor('wifi.startHotspot')[0]).toContain('hs boom');
+    b.service.stop();
+
+    errSpy.mockClear();
+    const c = setup();
+    c.f.wifiUp = true;
+    c.tailscale.status.mockRejectedValueOnce(new Error('st boom'));
+    c.service.start();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(lineFor('tailscale.status')).toHaveLength(1);
+    expect(lineFor('tailscale.status')[0]).toContain('st boom');
+    c.service.stop();
+
+    errSpy.mockClear();
+    const d = setup();
+    d.f.wifiUp = true;
+    d.tailscale.startLogin.mockRejectedValueOnce(new Error('tl boom'));
+    d.service.start();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(lineFor('tailscale.startLogin')).toHaveLength(1);
+    expect(lineFor('tailscale.startLogin')[0]).toContain('tl boom');
+    d.service.stop();
+
+    errSpy.mockClear();
+    const e = setup();
+    e.wifi.scan.mockRejectedValueOnce(new Error('scan boom'));
+    expect(await e.service.scanNetworks()).toEqual([]);
+    expect(lineFor('wifi.scan')).toHaveLength(1);
+    expect(lineFor('wifi.scan')[0]).toContain('scan boom');
+
+    errSpy.mockClear();
+    const g = setup();
+    g.f.wifiUp = true;
+    const hi = vi.fn(async () => {
+      throw new Error('net boom');
+    });
+    const svc = createSetupService({
+      wifi: g.wifi, tailscale: g.tailscale, now: () => 0, hasPhotos: () => false, hasInternet: hi, pollMs: 1000, startupGraceMs: 0,
+    });
+    svc.start();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(lineFor('hasInternet')).toHaveLength(1);
+    expect(lineFor('hasInternet')[0]).toContain('net boom');
+    svc.stop();
+  });
+
+  it('never logs the typed password', async () => {
+    const s = setup();
+    s.service.start();
+    await s.tick();
+    s.f.connectError = new Error('Could not join that WiFi network');
+    await s.service.submitWifi('Home', 'hunter2-typed', false);
+    for (const c of errSpy.mock.calls) expect(String(c[0])).not.toContain('hunter2-typed');
     s.service.stop();
   });
 

@@ -69,7 +69,11 @@ export function createSetupService(deps: SetupServiceDeps): SetupService {
   let sessionPassword: string | null = null;
   let hotspotUp = false;
   let portal: PortalHandle | null = null;
-  let busy = false; // a poll or a wifi submit is mutating hotspot state
+  // A poll in flight, and a FIFO chain of submits. Submits wait for the poll and
+  // for earlier submits; polls skip while any submit is pending.
+  let polling: Promise<void> | null = null;
+  let pendingSubmits = 0;
+  let submitChain: Promise<void> = Promise.resolve();
 
   let tailscaleUrl: string | undefined;
   let tailscaleInFlight = false;
@@ -102,30 +106,42 @@ export function createSetupService(deps: SetupServiceDeps): SetupService {
     },
 
     scanNetworks() {
-      return wifi.scan().catch(() => []);
+      return wifi.scan().catch((err) => {
+        logFailure('wifi.scan', err);
+        return [];
+      });
     },
 
-    async submitWifi(ssid, password, hidden) {
-      if (busy) {
-        lastError = 'The frame is busy, please try again';
-        return;
-      }
-      busy = true;
-      try {
-        await stopHotspot(false);
-        try {
-          await wifi.connect(ssid, password, hidden);
-          lastError = undefined;
-        } catch (err) {
-          lastError = err instanceof Error ? err.message : 'Could not join that WiFi network';
-          // Same password so the screen stays valid; saved networks are untouched.
-          await startHotspot();
-        }
-      } finally {
-        busy = false;
-      }
+    submitWifi(ssid, password, hidden) {
+      pendingSubmits++;
+      const job = submitChain.then(async () => {
+        if (polling) await polling;
+        await doSubmit(ssid, password, hidden);
+      });
+      submitChain = job.catch(() => {});
+      return job.finally(() => {
+        pendingSubmits--;
+      });
     },
   };
+
+  async function doSubmit(ssid: string, password: string | null, hidden?: boolean) {
+    await stopHotspot(false);
+    try {
+      await wifi.connect(ssid, password, hidden);
+      lastError = undefined;
+    } catch (err) {
+      logFailure('wifi.connect', err);
+      lastError = err instanceof Error ? err.message : 'Could not join that WiFi network';
+      // Same password so the screen stays valid; saved networks are untouched.
+      await startHotspot();
+    }
+  }
+
+  function logFailure(what: string, err: unknown) {
+    const msg = err instanceof Error ? err.message : 'unknown error';
+    console.error(`[setup] ${what} failed: ${msg.replace(/\s+/g, ' ')}`);
+  }
 
   function closePortal() {
     if (!portal) return;
@@ -150,6 +166,7 @@ export function createSetupService(deps: SetupServiceDeps): SetupService {
         }
       }
     } catch (err) {
+      logFailure('wifi.startHotspot', err);
       lastError = err instanceof Error ? err.message : 'Could not start the setup hotspot';
     }
   }
@@ -163,8 +180,8 @@ export function createSetupService(deps: SetupServiceDeps): SetupService {
     if (!wasUp && !endSession) return;
     try {
       await wifi.stopHotspot();
-    } catch {
-      console.error('[setup] could not stop hotspot');
+    } catch (err) {
+      logFailure('wifi.stopHotspot', err);
     }
   }
 
@@ -181,7 +198,8 @@ export function createSetupService(deps: SetupServiceDeps): SetupService {
           lastError = undefined;
         }
       })
-      .catch(() => {
+      .catch((err) => {
+        logFailure('tailscale.startLogin', err);
         lastError = 'Could not get a Tailscale login link yet';
       })
       .finally(() => {
@@ -189,19 +207,38 @@ export function createSetupService(deps: SetupServiceDeps): SetupService {
       });
   }
 
-  async function poll() {
-    if (busy) return;
-    busy = true;
+  function poll(): Promise<void> {
+    if (polling || pendingSubmits > 0) return Promise.resolve();
+    const p = runPoll().finally(() => {
+      polling = null;
+    });
+    polling = p;
+    return p;
+  }
+
+  async function runPoll() {
     try {
-      const wifiUp = await wifi.isConnected().catch(() => false);
+      const wifiUp = await wifi.isConnected().catch((err) => {
+        logFailure('wifi.isConnected', err);
+        return false;
+      });
       if (wifiUp) wifiDownSince = null;
       else if (wifiDownSince === null) wifiDownSince = now();
 
-      const internet = wifiUp ? await hasInternet().catch(() => false) : false;
-      const ts = wifiUp
-        ? await tailscale.status().catch(() => ({ loggedIn: false }) as { loggedIn: boolean; hostname?: string; tailnetIp?: string })
-        : { loggedIn: false as const };
-      tailnet = ts.loggedIn ? ((ts as { tailnetIp?: string }).tailnetIp ?? (ts as { hostname?: string }).hostname) : undefined;
+      const internet = wifiUp
+        ? await hasInternet().catch((err) => {
+            logFailure('hasInternet', err);
+            return false;
+          })
+        : false;
+      type TsStatus = Awaited<ReturnType<TailscaleClient['status']>>;
+      const ts: TsStatus = wifiUp
+        ? await tailscale.status().catch((err): TsStatus => {
+            logFailure('tailscale.status', err);
+            return { loggedIn: false };
+          })
+        : { loggedIn: false };
+      tailnet = ts.loggedIn ? (ts.tailnetIp ?? ts.hostname) : undefined;
 
       const result = nextPhase({
         current: phase,
@@ -229,10 +266,8 @@ export function createSetupService(deps: SetupServiceDeps): SetupService {
         tailscaleUrl = undefined;
       }
       if (phase === 'READY') lastError = undefined;
-    } catch {
-      console.error('[setup] poll failed');
-    } finally {
-      busy = false;
+    } catch (err) {
+      logFailure('poll', err);
     }
   }
 
