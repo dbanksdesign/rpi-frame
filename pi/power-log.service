@@ -1,9 +1,0 @@
-[Unit]
-Description=Power/thermal logger for photo frame
-
-[Service]
-ExecStart=/home/djb/dev/rpi-frame/pi/power-log.sh
-Restart=always
-
-[Install]
-WantedBy=multi-user.target

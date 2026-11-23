@@ -104,8 +104,10 @@ The deployed Pi runs the X11 LXDE desktop, not Wayland:
 - `photo-frame-server.service` runs the Node server.
 - `~/.config/lxsession/LXDE-pi/autostart` contains `@/home/<user>/dev/rpi-frame/start.sh`,
   which disables blanking, hides the cursor and runs Chromium in kiosk mode (restarting it if it exits).
-- `pi/install.sh` installs the power/thermal logger (`/var/log/power-log.csv`) and the hardware
-  watchdog, and disables the old `photo-frame-display.service` (not needed with this setup).
+- `pi/install.sh` is now the full plug-and-play installer (see [`pi/README.md`](pi/README.md)):
+  `frame` user, `/data` partition, kiosk, updater, overlay filesystem. It also installs the
+  power/thermal logger (now `/data/log/power-log.csv`) and the hardware watchdog, and disables
+  the old `photo-frame-display.service`.
 - Uploaded photos are downscaled to 1920px on upload. To shrink existing ones:
   `npm run build && npm run optimize:uploads`.
 - Wayland-only helper scripts live in `legacy/`.

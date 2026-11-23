@@ -1,0 +1,26 @@
+// Installed by pi/install.sh to /etc/polkit-1/rules.d/.
+//
+// The photo-frame server runs as user "frame" from a systemd service, i.e.
+// outside any active login session. Debian 12's own NetworkManager rule only
+// helps "local && active" sessions of netdev/sudo members, and the defaults
+// for inactive/any callers are "no" or "auth_admin", so without this rule the
+// server could not scan, join a network or run the setup hotspot.
+// Only the actions the setup flow needs are granted, and only to "frame".
+polkit.addRule(function (action, subject) {
+  if (subject.user !== "frame") {
+    return polkit.Result.NOT_HANDLED;
+  }
+  var allowed = [
+    "org.freedesktop.NetworkManager.network-control",
+    "org.freedesktop.NetworkManager.wifi.scan",
+    "org.freedesktop.NetworkManager.wifi.share.protected",
+    "org.freedesktop.NetworkManager.wifi.share.open",
+    "org.freedesktop.NetworkManager.settings.modify.own",
+    "org.freedesktop.NetworkManager.settings.modify.system",
+    "org.freedesktop.NetworkManager.enable-disable-wifi"
+  ];
+  if (allowed.indexOf(action.id) >= 0) {
+    return polkit.Result.YES;
+  }
+  return polkit.Result.NOT_HANDLED;
+});

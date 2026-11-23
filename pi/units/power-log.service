@@ -1,0 +1,13 @@
+[Unit]
+Description=Power/thermal logger for photo frame
+# Logs to /data/log/power-log.csv on the data partition.
+RequiresMountsFor=/data
+
+[Service]
+# Runs as root: vcgencmd needs /dev/vcio and /data/log is root-owned.
+ExecStart=/usr/local/lib/photo-frame/power-log.sh
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

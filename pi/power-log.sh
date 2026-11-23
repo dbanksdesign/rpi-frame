@@ -1,7 +1,10 @@
 #!/bin/bash
 # Logs power/thermal state every 10s and syncs to disk, so the last lines
-# before a sudden power loss survive. Output: /var/log/power-log.csv
-LOG=/var/log/power-log.csv
+# before a sudden power loss survive. Installed by pi/install.sh as
+# /usr/local/lib/photo-frame/power-log.sh (power-log.service).
+# Output: /data/log/power-log.csv on the data partition (override: POWER_LOG).
+LOG="${POWER_LOG:-/data/log/power-log.csv}"
+mkdir -p "$(dirname "$LOG")"
 [ -f "$LOG" ] || echo "time,uptime_s,ext5v_v,throttled,temp_c,mem_avail_mb" > "$LOG"
 while true; do
   v=$(vcgencmd pmic_read_adc EXT5V_V | sed -E 's/.*=([0-9.]+)V.*/\1/')
