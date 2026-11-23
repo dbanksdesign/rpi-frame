@@ -168,8 +168,10 @@ come back here after it).
 ## 3. Tailscale and remote access
 
 - [ ] Starting state: WiFi from Imager is up, Tailscale not logged in. After boot the LCD shows
-  "Connect your frame to Tailscale" with a QR code and a URL. (Reset any time with
-  `sudo tailscale logout`; the screen returns within about 15 s.)
+  "Connect your frame to Tailscale" with a QR code and a URL. (To redo it
+  later: `sudo tailscale logout`, then `sudo systemctl restart photo-frame-server` or reboot. The
+  screen only appears when the server starts not-yet-ready; after the ready card, a logout alone
+  changes nothing on screen.)
 - [ ] Scan the QR with a phone and sign in to the **brother** tailnet. The screen then shows the
   "You're all set" card (its contents are checked in section 4), and after 60 s (or a tap) the slideshow.
 - [ ] The text "Afterwards, share this frame with the person who set it up: Tailscale admin
@@ -196,8 +198,10 @@ come back here after it).
 
 Re-trigger the setup screen without a handoff (SPARE PI ONLY): connect Ethernet or use a keyboard,
 note the saved WiFi's name with `nmcli -t -f NAME,TYPE connection show`, then
-`sudo nmcli connection delete "<that name>"`. The hotspot appears after the server has been up for
-60 seconds.
+`sudo nmcli connection delete "<that name>"` **and** `sudo systemctl restart photo-frame-server`
+(or reboot). Deleting the profile alone is not enough: a frame that is already running with photos
+stays on the slideshow with the "No WiFi" label for 30 minutes. After the restart the setup phase
+starts at "no WiFi" and the hotspot appears about 60 seconds later.
 
 - [ ] The LCD shows "Welcome to your photo frame", the network `PhotoFrame-Setup`, a password
   and a QR code, and "A setup page opens automatically (or open http://10.42.0.1)".
@@ -239,8 +243,8 @@ note the saved WiFi's name with `nmcli -t -f NAME,TYPE connection show`, then
 - [ ] `http://photoframe.local:3000` still works.
 - [ ] Live updates over port 80: open the admin page on two devices at once, choose a different
   active photo on one, and the frame's slideshow and the other device update without a refresh.
-- [ ] While the hotspot is up (4): `curl -sI http://10.42.0.1/` from a phone-side device on the
-  hotspot redirects to the setup page, while on the Pi `curl -sI http://localhost:3000/` still
+- [ ] While the hotspot is up (re-trigger it as in section 4): `curl -sI http://10.42.0.1/` from a
+  laptop joined to the `PhotoFrame-Setup` network redirects to the setup page, while on the Pi `curl -sI http://localhost:3000/` still
   returns `200` and the kiosk keeps running.
 - [ ] Port-80 bind fallback (SPARE PI ONLY): `sudo systemctl stop photo-frame-server`, then in a
   second session `sudo python3 -m http.server 80`, then `sudo systemctl start photo-frame-server`.
@@ -297,7 +301,10 @@ nobody's frame on an older version waiting for an update.
   `git tag v0.1.1 && git push --tags`; wait for the release workflow.
 - [ ] On the admin page press **Check for updates**. It shows "Update available: v0.1.0 → v0.1.1".
   (The result may be cached for 5 minutes.)
-- [ ] Press **Update to v0.1.1**. The panel shows progress ("Downloading…", "Verifying…",
+- [ ] **Double-click** **Update to v0.1.1** (this is the one release available; a second click
+  cannot be repeated later). Only one update runs: `systemctl status frame-update` shows one
+  unit and the panel shows a single progress sequence; the extra click is ignored or reports an
+  update is already running (updater exit 12; verify wording). The panel shows progress ("Downloading…", "Verifying…",
   "Installing…", "Restarting…", "Checking the new version…"), then "Reconnecting…", then a green
   "Updated to v0.1.1". The slideshow pauses about a minute.
 - [ ] The **kiosk page reloads itself** (within about a minute) and keeps working with the new
@@ -305,11 +312,7 @@ nobody's frame on an older version waiting for an update.
 - [ ] Reload the admin page after the update: it shows no green "Updated to ..." banner (a stale
   status file must not look like a new success), only "Installed version: v0.1.1".
   `cat /data/update-status.json` still holds the old success.
-- [ ] Double-click **Update** (needs a release newer than the installed one, so do this on 7.2 or
-  with `v0.1.3`): only one update
-  runs. `systemctl status frame-update` shows one unit; a second press is ignored or reports an
-  update is already running (updater exit 12; verify wording).
-- [ ] While an update runs, `ls -l /run/frame-update.lock` exists and `sudo flock -n /run/frame-update.lock true`
+- [ ] While that update runs (prepare a second SSH session before clicking), `ls -l /run/frame-update.lock` exists and `sudo flock -n /run/frame-update.lock true`
   fails.
 
 ### 7.3 Sudoers is exactly one command
@@ -356,7 +359,7 @@ All SPARE PI ONLY. Overlay on, frame in READY.
   returns, earlier photos are intact (`ls /data/uploads | wc -l` never drops), and
   `sudo journalctl -b -p err --no-pager | head` shows nothing alarming. `/data` is not remounted
   read-only: `findmnt -no OPTIONS /data` still has `rw`; check `sudo dmesg | grep -i ext4`.
-- [ ] **During an update:** with a release ready (7.2), press Update and pull the plug during
+- [ ] **During an update:** with a release ready (publish another trivial release first, the next unused tag after 7.4, for example `v0.1.4`, because 7.2 consumed `v0.1.1`), press Update and pull the plug during
   "Installing…" and again during "Restarting…". The card boots, the slideshow comes back,
   `readlink /data/current` points at a complete release (old or new), and a retry of the update
   succeeds. Remember a half-finished update leaves `/data/update-status.json` as "running":
@@ -420,6 +423,10 @@ moment the person hesitated or asked a question.
 ## 11. Handoff
 
 SPARE PI ONLY (this wipes it). Run at a keyboard or over SSH on the **LAN**, never over Tailscale.
+
+- [ ] **First** copy off the soak data, because the handoff deletes the power log, the update
+  status and the journal: `cp /data/log/power-log.csv ~/power-log-<date>.csv` (and `scp` it away),
+  then fill in section 12.
 
 - [ ] `sudo ./pi/prepare-handoff.sh --dry-run --clear-photos` lists the plan and changes nothing.
 - [ ] `sudo ./pi/prepare-handoff.sh --clear-photos` (or `--keep-photos`). Type `handoff` when
