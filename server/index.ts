@@ -55,12 +55,13 @@ if (process.env.FRAME_SETUP === 'off') {
   setupService.start();
 }
 
-// Global JSON parser goes after the setup router, which has its own parser and
-// error handler (a malformed WiFi body must not reach Express's default logger).
-app.use(express.json());
-
-// System routes (health, version) must be mounted before the main API router
+// System routes (health, version, update) must be mounted before the main API
+// router. They sit ahead of the global JSON parser because the update route has
+// its own parser and error handler (malformed bodies must not be logged).
 app.use('/api', createSystemRouter());
+
+// Global JSON parser goes after the setup and system routers, which have their own.
+app.use(express.json());
 
 // API routes
 app.use('/api', apiRouter);
