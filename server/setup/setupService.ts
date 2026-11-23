@@ -218,6 +218,7 @@ export function createSetupService(deps: SetupServiceDeps): SetupService {
 
   async function runPoll() {
     try {
+      // "Online": WiFi or an Ethernet cable (never the setup hotspot itself).
       const wifiUp = await wifi.isConnected().catch((err) => {
         logFailure('wifi.isConnected', err);
         return false;

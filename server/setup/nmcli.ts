@@ -11,6 +11,11 @@ export interface WifiManager {
   connect(ssid: string, password: string | null, hidden?: boolean): Promise<void>;
   startHotspot(ssid: string, password: string): Promise<void>;
   stopHotspot(): Promise<void>;
+  /**
+   * "Online": true when any ethernet or wifi device is connected and its active
+   * connection is not the setup Hotspot. An Ethernet cable counts (spec: it is a
+   * supported fallback), so a cabled frame never starts the hotspot.
+   */
   isConnected(): Promise<boolean>;
 }
 
@@ -91,7 +96,7 @@ export function createWifiManager(run: Run): WifiManager {
         const { stdout } = await run('nmcli', ['-t', '-f', 'DEVICE,TYPE,STATE,CONNECTION', 'device']);
         return stdout.split('\n').some((line) => {
           const [, type, state, connection] = splitTerse(line);
-          return type === 'wifi' && state === 'connected' && connection !== HOTSPOT_CONNECTION;
+          return (type === 'wifi' || type === 'ethernet') && state === 'connected' && connection !== HOTSPOT_CONNECTION;
         });
       } catch {
         return false;

@@ -85,6 +85,17 @@ describe('setupService', () => {
     s.service.stop();
   });
 
+  it('never starts the hotspot while online (e.g. Ethernet: isConnected() is true)', async () => {
+    const s = setup();
+    s.f.wifiUp = true;
+    s.service.start();
+    await s.tick(120_000);
+    expect(s.wifi.startHotspot).not.toHaveBeenCalled();
+    expect(s.service.getState().hotspot).toBeUndefined();
+    expect(s.service.getState().phase).not.toBe('NO_WIFI');
+    s.service.stop();
+  });
+
   it('stops hotspot and portal when leaving NO_WIFI', async () => {
     const s = setup();
     s.service.start();

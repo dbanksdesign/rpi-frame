@@ -98,6 +98,18 @@ describe('isConnected', () => {
     expect(await createWifiManager(run).isConnected()).toBe(true);
     expect(calls[0].args).toEqual(['-t', '-f', 'DEVICE,TYPE,STATE,CONNECTION', 'device']);
   });
+  it('true for a connected ethernet device (the cable fallback), wifi down', async () => {
+    const { run } = fakeRun([{ stdout: 'eth0:ethernet:connected:Wired connection 1\nwlan0:wifi:disconnected:\nlo:loopback:connected (externally):lo\n' }]);
+    expect(await createWifiManager(run).isConnected()).toBe(true);
+  });
+  it('true for ethernet even while the setup hotspot is up on wlan0', async () => {
+    const { run } = fakeRun([{ stdout: 'wlan0:wifi:connected:Hotspot\neth0:ethernet:connected:Wired connection 1\n' }]);
+    expect(await createWifiManager(run).isConnected()).toBe(true);
+  });
+  it('false for loopback or other device types only', async () => {
+    const { run } = fakeRun([{ stdout: 'lo:loopback:connected (externally):lo\np2p-dev-wlan0:wifi-p2p:disconnected:\neth0:ethernet:unavailable:\n' }]);
+    expect(await createWifiManager(run).isConnected()).toBe(false);
+  });
   it('false when only the hotspot is up', async () => {
     const { run } = fakeRun([{ stdout: 'wlan0:wifi:connected:Hotspot\n' }]);
     expect(await createWifiManager(run).isConnected()).toBe(false);
