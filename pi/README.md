@@ -179,6 +179,8 @@ and the polkit rule.
 
 ## Not verified on real hardware
 
+The step-by-step test script for all of this is [`pi/ACCEPTANCE.md`](ACCEPTANCE.md).
+
 These were checked offline (package indexes, `raspi-config` source, containers), but not yet on a
 real Pi 5. Run through them on the test Pi:
 
