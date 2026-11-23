@@ -181,7 +181,7 @@ If the overlay is still on, a normal run refuses, because its changes would be l
 reboot. With `--writable` it only turns the overlay off; reboot and re-run. A release that needs
 a new system package also needs `install.sh` to be re-run.
 
-**Disable the overlay only with `./pi/install.sh --writable`, never from the `raspi-config`
+**Disable the overlay only with `./pi/install.sh --owner-key ~/owner.pub --writable`, never from the `raspi-config`
 menu.** The installer writes the token as `overlayroot=tmpfs:recurse=0`, and raspi-config's
 disable no longer matches that form, so the menu would leave the frame read-only.
 
@@ -192,7 +192,7 @@ pre-overlay line, so restoring it boots the frame **writable, with the overlay o
 leaves a clean backup alone; a backup that still has a token (written by an earlier installer
 version, after raspi-config) is replaced by the same line without it, and the old file is kept
 once as `cmdline.txt.photo-frame.orig.old`. The normal way to turn the overlay off is still
-`sudo ./pi/install.sh --writable`. Only if a Pi fails to boot after an install, or you cannot log
+`sudo ./pi/install.sh --owner-key ~/owner.pub --writable`. Only if a Pi fails to boot after an install, or you cannot log
 in to run that, put the card in another machine and copy `cmdline.txt.photo-frame.orig` over
 `cmdline.txt`; then boot, and re-run the installer to turn the overlay back on.
 

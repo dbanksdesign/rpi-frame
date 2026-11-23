@@ -487,7 +487,7 @@ step_preflight() {
   if cmdline_has_overlay "$(cat /proc/cmdline)"; then
     OVERLAY_ACTIVE=1
     if [[ $WRITABLE -eq 0 ]]; then
-      die "the read-only overlay filesystem is active, so changes would be lost at reboot. Run './pi/install.sh --writable ...', reboot, then re-run."
+      die "the read-only overlay filesystem is active, so changes would be lost at reboot. Run './pi/install.sh --owner-key ~/owner.pub --writable ...', reboot, then re-run."
     fi
     SKIP_TO_OVERLAY=1
     say "overlay filesystem is active: only step 14 (disable it) will run; reboot, then re-run."

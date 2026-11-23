@@ -113,7 +113,7 @@ also in RAM, everything is lost at the next power cut. The installer sets
 > **If this fails:** `/data` shows `overlay` or the files vanish: `pi/install.sh`,
 > `cmdline_overlay_enable` and `step_overlay`; `/boot/firmware/cmdline.txt` (first line);
 > `raspi-config nonint enable_overlayfs` (verify what it wrote). To get the card writable again,
-> use `sudo ./pi/install.sh --writable` and reboot. If you cannot log in, edit
+> use `sudo ./pi/install.sh --owner-key ~/owner.pub --writable` and reboot. If you cannot log in, edit
 > `/boot/firmware/cmdline.txt` on another machine and remove every `overlayroot=tmpfs...` token,
 > or copy `cmdline.txt.photo-frame.orig` over it: that backup has no `overlayroot=` token, so the
 > frame boots writable with the overlay off (check its first line has `root=` first).
