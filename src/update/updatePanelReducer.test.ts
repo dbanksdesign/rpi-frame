@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { updatePanelReducer, initialUpdatePanelState, type UpdatePanelState } from './updatePanelReducer'
+import { updatePanelReducer, initialUpdatePanelState, recoverFromStatus, type UpdatePanelState } from './updatePanelReducer'
 
 const idle = initialUpdatePanelState
 const available: UpdatePanelState = { phase: 'available', current: 'v1.0.0', latest: 'v1.1.0', notes: 'n' }
@@ -89,18 +89,34 @@ describe('updatePanelReducer', () => {
   it('status failed -> failed with server message', () => {
     const s = updatePanelReducer(installing, {
       type: 'pollResult',
-      status: { state: 'failed', message: 'Rolled back to v1.0.0' },
+      status: { state: 'failed', tag: 'v1.1.0', message: 'Rolled back to v1.0.0' },
     })
     expect(s).toMatchObject({ phase: 'failed', message: 'Rolled back to v1.0.0' })
   })
 
   it('status succeeded -> succeeded', () => {
-    expect(updatePanelReducer(installing, { type: 'pollResult', status: { state: 'succeeded' } }).phase).toBe('succeeded')
+    expect(updatePanelReducer(installing, { type: 'pollResult', status: { state: 'succeeded', tag: 'v1.1.0' } }).phase).toBe('succeeded')
   })
 
   it('status running updates progress message and stays installing', () => {
     const s = updatePanelReducer(installing, { type: 'pollResult', status: { state: 'running', message: 'Downloading' } })
     expect(s).toMatchObject({ phase: 'installing', message: 'Downloading' })
+  })
+
+  it('stale succeeded with a different tag is ignored', () => {
+    expect(updatePanelReducer(installing, { type: 'pollResult', status: { state: 'succeeded', tag: 'v1.0.5' } })).toBe(installing)
+  })
+
+  it('succeeded with a missing tag is ignored', () => {
+    expect(updatePanelReducer(installing, { type: 'pollResult', status: { state: 'succeeded' } })).toBe(installing)
+  })
+
+  it('failed with a different tag is ignored', () => {
+    expect(updatePanelReducer(installing, { type: 'pollResult', status: { state: 'failed', tag: 'v1.0.5', message: 'old' } })).toBe(installing)
+  })
+
+  it('matching tag ignores a v prefix difference', () => {
+    expect(updatePanelReducer(installing, { type: 'pollResult', status: { state: 'succeeded', tag: '1.1.0' } }).phase).toBe('succeeded')
   })
 
   it('status poll is ignored when not installing', () => {
@@ -115,5 +131,50 @@ describe('updatePanelReducer', () => {
 
   it('reset -> idle', () => {
     expect(updatePanelReducer(installing, { type: 'reset' }).phase).toBe('idle')
+  })
+})
+
+describe('recoverFromStatus', () => {
+  it('running resumes installing with the status tag', () => {
+    expect(recoverFromStatus('v1.1.0', { state: 'running', tag: 'v1.2.0' })).toEqual({ type: 'resume', phase: 'installing', target: 'v1.2.0' })
+  })
+  it('running falls back to the stored tag', () => {
+    expect(recoverFromStatus('v1.1.0', { state: 'running' })).toEqual({ type: 'resume', phase: 'installing', target: 'v1.1.0' })
+  })
+  it('running with no tag and nothing stored yields no event', () => {
+    expect(recoverFromStatus(null, { state: 'running' })).toBeNull()
+  })
+  it('succeeded with matching stored tag resumes as succeeded', () => {
+    expect(recoverFromStatus('v1.1.0', { state: 'succeeded', tag: '1.1.0' })).toEqual({ type: 'resume', phase: 'succeeded', target: 'v1.1.0' })
+  })
+  it('failed with matching stored tag resumes as failed with the message', () => {
+    expect(recoverFromStatus('v1.1.0', { state: 'failed', tag: 'v1.1.0', message: 'Rolled back' })).toEqual({
+      type: 'resume', phase: 'failed', target: 'v1.1.0', message: 'Rolled back',
+    })
+  })
+  it('final status without stored tag yields no event', () => {
+    expect(recoverFromStatus(null, { state: 'succeeded', tag: 'v1.1.0' })).toBeNull()
+  })
+  it('final status with a different tag yields no event', () => {
+    expect(recoverFromStatus('v1.1.0', { state: 'failed', tag: 'v1.0.0', message: 'x' })).toBeNull()
+  })
+  it('idle status yields no event', () => {
+    expect(recoverFromStatus('v1.1.0', { state: 'idle' })).toBeNull()
+  })
+  it('fetch failure with stored tag resumes reconnecting', () => {
+    expect(recoverFromStatus('v1.1.0', null)).toEqual({ type: 'resume', phase: 'reconnecting', target: 'v1.1.0' })
+  })
+  it('fetch failure without stored tag yields no event', () => {
+    expect(recoverFromStatus(null, null)).toBeNull()
+  })
+})
+
+describe('resume event', () => {
+  it('applies from idle', () => {
+    expect(updatePanelReducer(idle, { type: 'resume', phase: 'installing', target: 'v1.1.0' })).toMatchObject({ phase: 'installing', target: 'v1.1.0' })
+    expect(updatePanelReducer(idle, { type: 'resume', phase: 'failed', target: 'v1.1.0', message: 'm' })).toMatchObject({ phase: 'failed', message: 'm' })
+  })
+  it('is ignored when not idle', () => {
+    expect(updatePanelReducer(available, { type: 'resume', phase: 'installing', target: 'v1.1.0' })).toBe(available)
   })
 })

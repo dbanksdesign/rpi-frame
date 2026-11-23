@@ -40,6 +40,7 @@ export type UpdatePanelEvent =
   | { type: 'fetchFailed' }
   | { type: 'serverBack'; version: string; ok: boolean }
   | { type: 'timeout' }
+  | { type: 'resume'; phase: 'installing' | 'reconnecting' | 'succeeded' | 'failed'; target: string; message?: string }
   | { type: 'reset' }
 
 export const ROLLBACK_MESSAGE = "The update didn't finish; the previous version is still running"
@@ -71,6 +72,10 @@ export function updatePanelReducer(state: UpdatePanelState, event: UpdatePanelEv
     case 'pollResult': {
       if (state.phase !== 'installing') return state
       const { status } = event
+      if (status.state === 'succeeded' || status.state === 'failed') {
+        // Ignore stale results left over from an earlier update.
+        if (!state.target || !status.tag || norm(status.tag) !== norm(state.target)) return state
+      }
       if (status.state === 'failed') return { ...state, phase: 'failed', message: status.message }
       if (status.state === 'succeeded') {
         return { ...state, phase: 'succeeded', current: state.target ?? state.current, message: undefined }
@@ -93,6 +98,16 @@ export function updatePanelReducer(state: UpdatePanelState, event: UpdatePanelEv
       return { ...state, phase: 'failed', current: event.version, message: ROLLBACK_MESSAGE }
     }
 
+    case 'resume':
+      if (state.phase !== 'idle') return state
+      return {
+        phase: event.phase,
+        current: state.current,
+        target: event.target,
+        ...(event.phase === 'succeeded' ? { current: event.target } : {}),
+        ...(event.message ? { message: event.message } : {}),
+      }
+
     case 'timeout':
       if (state.phase !== 'installing' && state.phase !== 'reconnecting') return state
       return { ...state, phase: 'failed', message: TIMEOUT_MESSAGE }
@@ -100,4 +115,29 @@ export function updatePanelReducer(state: UpdatePanelState, event: UpdatePanelEv
     case 'reset':
       return { phase: 'idle', current: state.current }
   }
+}
+
+/**
+ * Decide how a freshly mounted panel should resume an in-flight or just-finished
+ * update. `stored` is the target tag remembered when the install started;
+ * `status` is null when /api/update/status could not be fetched.
+ */
+export function recoverFromStatus(stored: string | null, status: StatusResult | null): UpdatePanelEvent | null {
+  if (status === null) {
+    return stored ? { type: 'resume', phase: 'reconnecting', target: stored } : null
+  }
+  if (status.state === 'running') {
+    const target = status.tag ?? stored
+    return target ? { type: 'resume', phase: 'installing', target } : null
+  }
+  if (status.state === 'succeeded' || status.state === 'failed') {
+    if (!stored || !status.tag || norm(status.tag) !== norm(stored)) return null
+    return {
+      type: 'resume',
+      phase: status.state,
+      target: stored,
+      ...(status.state === 'failed' && status.message ? { message: status.message } : {}),
+    }
+  }
+  return null
 }

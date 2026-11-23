@@ -3,6 +3,7 @@ import { Alert, Box, Button, Group, Loader, Paper, Stack, Text, Title } from '@m
 import {
   initialUpdatePanelState,
   updatePanelReducer,
+  recoverFromStatus,
   type CheckResult,
   type StatusResult,
 } from '../update/updatePanelReducer'
@@ -11,6 +12,7 @@ const POLL_MS = 2000
 const GIVE_UP_MS = 10 * 60 * 1000
 const AUTO_CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000
 const LAST_CHECK_KEY = 'frame.update.lastCheck'
+const TARGET_KEY = 'frame.update.target'
 const CHECK_ERROR = "Couldn't check for updates right now"
 
 function readLastCheck(): number {
@@ -28,6 +30,23 @@ function writeLastCheck(): void {
     localStorage.setItem(LAST_CHECK_KEY, String(Date.now()))
   } catch {
     // storage unavailable: auto-check simply runs on every mount
+  }
+}
+
+function readTarget(): string | null {
+  try {
+    return sessionStorage.getItem(TARGET_KEY)
+  } catch {
+    return null
+  }
+}
+
+function writeTarget(tag: string | null): void {
+  try {
+    if (tag) sessionStorage.setItem(TARGET_KEY, tag)
+    else sessionStorage.removeItem(TARGET_KEY)
+  } catch {
+    // storage unavailable: recovery after reload just won't work
   }
 }
 
@@ -74,13 +93,36 @@ function UpdatePanel() {
         if (d && typeof d.version === 'string' && !controller.signal.aborted) setInstalled(d.version)
       })
       .catch(() => {})
-    if (Date.now() - readLastCheck() > AUTO_CHECK_INTERVAL_MS) void runCheck()
+    // Resume an in-flight or just-finished update before considering the auto-check.
+    const recover = async () => {
+      let status: StatusResult | null = null
+      try {
+        const res = await fetch('/api/update/status', { signal: controller.signal })
+        if (res.ok) status = (await res.json()) as StatusResult
+      } catch {
+        status = null
+      }
+      if (controller.signal.aborted) return
+      const event = recoverFromStatus(readTarget(), status)
+      if (event) {
+        deadline.current = Date.now() + GIVE_UP_MS
+        dispatch(event)
+        return
+      }
+      if (Date.now() - readLastCheck() > AUTO_CHECK_INTERVAL_MS) void runCheck()
+    }
+    void recover()
     return () => {
       controller.abort()
       checkController.current?.abort()
       installController.current?.abort()
     }
   }, [runCheck])
+
+  // The remembered target is only needed while an update is in flight.
+  useEffect(() => {
+    if (state.phase === 'succeeded' || state.phase === 'failed') writeTarget(null)
+  }, [state.phase])
 
   // Single polling loop, selected by phase. The effect cleanup guarantees only one runs.
   const polling = state.phase === 'installing' || state.phase === 'reconnecting' ? state.phase : null
@@ -151,6 +193,7 @@ function UpdatePanel() {
       if (controller.signal.aborted) return
       if (res.status === 202 || (res.status === 409 && body.status === 'already-running')) {
         deadline.current = Date.now() + GIVE_UP_MS
+        writeTarget(tag)
         dispatch({ type: 'installStarted', tag })
       } else {
         setInstallError(body.error ?? 'Could not start the update')
