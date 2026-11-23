@@ -254,9 +254,12 @@ for line in "User=frame" "WorkingDirectory=/data/current" \
   "Environment=NODE_ENV=production PORT=3000 FRAME_DATA_DIR=/data" \
   "AmbientCapabilities=CAP_NET_BIND_SERVICE" "RequiresMountsFor=/data" \
   "After=network-online.target NetworkManager.service tailscaled.service" \
-  "Restart=always" "RestartSec=3"; do
+  "Restart=always" "RestartSec=3" \
+  "ProtectHome=read-only" "Environment=XAUTHORITY=/home/frame/.Xauthority" "PrivateTmp=yes"; do
   if grep -qxF "$line" "$SERVER_UNIT" 2> /dev/null; then ok; else bad "server unit lacks [$line]"; fi
 done
+# xset (Display Off/On) needs the X cookie under /home/frame: never hide /home.
+if grep -qE '^ProtectHome=(yes|true|tmpfs)' "$SERVER_UNIT"; then bad "server unit hides /home (breaks xset)"; else ok; fi
 if [[ -e "$UNITS/photo-frame-display.service" ]]; then bad "retired photo-frame-display.service must not exist"; else ok; fi
 
 SERVICES=0
@@ -266,7 +269,8 @@ for unit in "$UNITS"/*.service; do
   name="$(basename "$unit")"
   if grep -qxF "RequiresMountsFor=/data" "$unit"; then ok; else bad "$name lacks RequiresMountsFor=/data"; fi
   if grep -qE '^[[:space:]]*NoNewPrivileges=(yes|true|1|on)' "$unit"; then bad "$name sets NoNewPrivileges"; else ok; fi
-  if grep -q '/home/' "$unit"; then bad "$name references /home"; else ok; fi
+  # The only /home reference allowed is the read-only X cookie path.
+  if grep -v -x -F "Environment=XAUTHORITY=/home/frame/.Xauthority" "$unit" | grep -v '^#' | grep -q '/home/'; then bad "$name references /home"; else ok; fi
   # Syntax sanity: only sections, Key=Value lines, comments and blanks.
   if awk '
       /^[[:space:]]*$/ || /^[#;]/ { next }

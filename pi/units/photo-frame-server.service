@@ -16,6 +16,9 @@ WorkingDirectory=/data/current
 ExecStartPre=+-/usr/local/lib/photo-frame/tailscale-operator.sh
 ExecStart=/usr/bin/node /data/current/dist/server/index.js
 Environment=NODE_ENV=production PORT=3000 FRAME_DATA_DIR=/data
+# Display Off/On runs `DISPLAY=:0 xset ...`, which needs the X cookie LightDM
+# writes for the kiosk session (frame's autologin).
+Environment=XAUTHORITY=/home/frame/.Xauthority
 # The captive portal listens on port 80 while the setup hotspot is up.
 AmbientCapabilities=CAP_NET_BIND_SERVICE
 Restart=always
@@ -24,11 +27,12 @@ RestartSec=3
 # - NoNewPrivileges is NOT set: the update button runs
 #   `sudo -n systemd-run ... /usr/local/sbin/frame-update <tag>`, and sudo is
 #   setuid, which NoNewPrivileges would block.
-# - ProtectHome: the server never reads /home (its code and data are under
-#   /data); this keeps it away from the installing user's files and keys.
+# - ProtectHome=read-only: the server writes nothing under /home (its code and
+#   data are under /data), but xset must read /home/frame/.Xauthority, so /home
+#   is read-only rather than hidden.
 # - PrivateTmp: upload scratch files stay private to the service. The updater
 #   runs as its own transient unit, so it is not affected.
-ProtectHome=yes
+ProtectHome=read-only
 PrivateTmp=yes
 
 [Install]
