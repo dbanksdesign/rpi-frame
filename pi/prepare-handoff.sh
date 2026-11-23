@@ -24,6 +24,11 @@
 #
 # Env: FRAME_DATA_DIR (default /data) -- the data root; tests point it at a
 #   temp dir. Must be an absolute path without ".." and not "/".
+#   FRAME_HANDOFF_LOG (default /run/prepare-handoff.log) -- after the confirmation
+#   all output goes to this file (tmpfs, gone at shutdown) and HUP/PIPE are
+#   ignored, so losing the terminal (SSH over WiFi drops when the WiFi profiles are
+#   deleted) never stops the run before poweroff. It may not be under /data or
+#   FRAME_DATA_DIR. A background `tail -f` keeps showing it while the terminal lives.
 #   FRAME_HANDOFF_TEST_ALLOW_NONROOT=1 (tests only) lets a non-root user run for
 #   real; it is refused for the default /data.
 #
@@ -51,6 +56,8 @@ DATA_REAL=""     # physical path; every deletion must be strictly inside it
 WIFI_UUIDS=()
 WIFI_NAMES=()
 WIFI_BAD=0
+LOG="${FRAME_HANDOFF_LOG-/run/prepare-handoff.log}"
+TAIL_PID=
 
 # ---- output helpers ----------------------------------------------------------
 step() { printf '\n[%s/%s] %s\n' "$1" "$TOTAL_STEPS" "$2"; }
@@ -166,6 +173,34 @@ validate_data_dir() {
   if [[ "${FRAME_HANDOFF_TEST_ALLOW_NONROOT:-}" == 1 && "$DATA_REAL" == /data ]]; then
     usage_error "FRAME_HANDOFF_TEST_ALLOW_NONROOT must never be combined with the real /data"
   fi
+}
+
+validate_log_path() {
+  if [[ -z "$LOG" || "$LOG" != /* ]]; then usage_error "FRAME_HANDOFF_LOG must be an absolute path"; fi
+  case "/$LOG/" in */../*) usage_error "FRAME_HANDOFF_LOG must not contain '..' components" ;; esac
+  case "$LOG" in
+    /data | /data/* | "$DATA" | "$DATA"/* | "$DATA_REAL" | "$DATA_REAL"/*)
+      usage_error "FRAME_HANDOFF_LOG must not be on the persistent data partition ($LOG)" ;;
+  esac
+}
+
+# start_logging: from here on nothing is written to the terminal by this
+# process, and HUP/PIPE cannot stop it.
+stop_tail() {
+  if [[ -n "$TAIL_PID" ]]; then
+    sleep 1
+    kill "$TAIL_PID" 2> /dev/null || true
+    TAIL_PID=
+  fi
+}
+start_logging() {
+  ( umask 077; : >> "$LOG" ) 2> /dev/null || die "cannot write the log $LOG; nothing was changed"
+  printf '\nOutput continues in %s; the frame powers off by itself, even if this session drops.\n' "$LOG"
+  tail -n +1 -f "$LOG" 2> /dev/null &
+  TAIL_PID=$!
+  trap stop_tail EXIT
+  trap '' HUP PIPE
+  exec >> "$LOG" 2>&1 < /dev/null
 }
 
 # ---- path guards -----------------------------------------------------------------
@@ -368,6 +403,7 @@ step_preflight() {
     read -r answer || true
     if [[ "$answer" != handoff ]]; then die "aborted; nothing was changed" 1; fi
   fi
+  start_logging
 }
 
 step_stop_server() {
@@ -476,6 +512,7 @@ step_shutdown() {
 main() {
   parse_args "$@"
   validate_data_dir
+  validate_log_path
   if [[ $DRY -eq 1 ]]; then printf 'photo-frame handoff: dry run, no changes will be made\n'; fi
   step_preflight
   step_stop_server

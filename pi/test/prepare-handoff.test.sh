@@ -10,6 +10,7 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PI="$(cd "$HERE/.." && pwd)"
 SCRIPT="$PI/prepare-handoff.sh"
 ROOT="$(mktemp -d)"
+[[ -n "$ROOT" && -d "$ROOT" ]] || { echo "mktemp failed" >&2; exit 1; }
 trap 'rm -rf "$ROOT"' EXIT
 
 PASS=0
@@ -43,7 +44,9 @@ exit 0'
 make_stub tailscale '
 case "$1" in
   status) [[ -f "$STUB_STATE/ts-loggedin" ]] && exit 0; exit 1 ;;
-  logout) rm -f "$STUB_STATE/ts-loggedin"; exit 0 ;;
+  logout)
+    if [[ -n "${STUB_HUP_PIDFILE:-}" ]]; then kill -HUP "$(cat "$STUB_HUP_PIDFILE")"; sleep 1; fi
+    rm -f "$STUB_STATE/ts-loggedin"; exit 0 ;;
 esac
 exit 0'
 make_stub systemctl 'exit 0'
@@ -58,6 +61,7 @@ UUID_Q=55555555-5555-4555-8555-555555555555
 # new_sandbox: a fresh frame data tree under $SB. Sets SB DATA OUTSIDE.
 new_sandbox() {
   SB="$(mktemp -d "$ROOT/sb.XXXXXX")"
+  [[ -n "$SB" && -d "$SB" && "$SB" == "$ROOT"/* ]] || { echo "sandbox creation failed" >&2; exit 1; }
   DATA="$SB/data"
   OUTSIDE="$SB/outside"
   export STUB_LOG="$SB/calls.log" STUB_STATE="$SB/state"
@@ -96,7 +100,8 @@ new_sandbox() {
 
 # run_ph <args...>: runs the script inside the sandbox. Sets OUT (stdout+stderr), RC.
 run_ph() {
-  OUT="$(cd "$SB" && env FRAME_DATA_DIR="$DATA" FRAME_HANDOFF_TEST_ALLOW_NONROOT=1 PATH="$BIN:$PATH" \
+  [[ "$DATA" == "$ROOT"/*/data ]] || { echo "refusing to run outside the sandbox: [$DATA]" >&2; exit 1; }
+  OUT="$(cd "$SB" && env FRAME_DATA_DIR="$DATA" FRAME_HANDOFF_LOG="$SB/handoff.log" FRAME_HANDOFF_TEST_ALLOW_NONROOT=1 PATH="$BIN:$PATH" \
     bash "$SCRIPT" "$@" 2>&1 < /dev/null)"
   RC=$?
 }
@@ -124,11 +129,11 @@ run_ph --yes --keep-photos --bogus
 assert_eq "$RC" 2 "unknown flag"
 for bad_dir in "" "/" "relative/path" "$DATA/../etc" "//"; do
   OUT="$(cd "$SB" && env FRAME_DATA_DIR="$bad_dir" FRAME_HANDOFF_TEST_ALLOW_NONROOT=1 PATH="$BIN:$PATH" \
-    bash "$SCRIPT" --yes --keep-photos --no-shutdown 2>&1 < /dev/null)"
+    bash "$SCRIPT" --dry-run --yes --keep-photos --no-shutdown 2>&1 < /dev/null)"
   assert_eq "$?" 2 "bad FRAME_DATA_DIR [$bad_dir]"
 done
 OUT="$(cd "$SB" && env -u FRAME_DATA_DIR FRAME_HANDOFF_TEST_ALLOW_NONROOT=1 PATH="$BIN:$PATH" \
-  bash "$SCRIPT" --yes --keep-photos --no-shutdown 2>&1 < /dev/null)"
+  bash "$SCRIPT" --dry-run --yes --keep-photos --no-shutdown 2>&1 < /dev/null)"
 assert_eq "$?" 2 "test override refuses the default /data"
 assert_eq "$(calls)" "" "argument errors run no commands"
 run_ph --clear-photos --no-shutdown
@@ -139,7 +144,7 @@ assert_eq "$(tree)" "$before" "argument errors and non-TTY abort change nothing"
 # not root and no test override
 if [[ $EUID -ne 0 ]]; then
   : > "$STUB_LOG"
-  OUT="$(cd "$SB" && env FRAME_DATA_DIR="$DATA" PATH="$BIN:$PATH" bash "$SCRIPT" --yes --keep-photos 2>&1 < /dev/null)"
+  OUT="$(cd "$SB" && env FRAME_DATA_DIR="$DATA" FRAME_HANDOFF_LOG="$SB/handoff.log" PATH="$BIN:$PATH" bash "$SCRIPT" --yes --keep-photos 2>&1 < /dev/null)"
   assert_eq "$?" 4 "non-root real run refused"
   assert_eq "$(calls)" "" "non-root refusal ran no commands"
 fi
@@ -276,6 +281,36 @@ assert_eq "$RC" 0 "no-shutdown exit"
 assert_not_contains "$(calls)" "poweroff" "--no-shutdown records no poweroff"
 assert_contains "$OUT" "Safe to unplug" "final message also with --no-shutdown"
 assert_contains "$(calls)" "[delete]" "--no-shutdown still clears wifi"
+
+# ---- 5b. losing the terminal must not stop the run ----------------------------------------
+# (a) stdout becomes a closed pipe right after the log announcement
+new_sandbox
+{ env FRAME_DATA_DIR="$DATA" FRAME_HANDOFF_LOG="$SB/handoff.log" FRAME_HANDOFF_TEST_ALLOW_NONROOT=1 PATH="$BIN:$PATH" \
+    bash "$SCRIPT" --yes --clear-photos < /dev/null 2>&1; echo $? > "$SB/rc"; } \
+  | { while IFS= read -r l; do [[ "$l" == *handoff.log* ]] && break; done; } > /dev/null
+assert_eq "$(cat "$SB/rc" 2> /dev/null)" 0 "closed stdout: exit 0"
+assert_eq "$(calls | tail -1)" "systemctl [poweroff]" "closed stdout: poweroff still last"
+assert_contains "$(cat "$SB/handoff.log" 2> /dev/null)" "Safe to unplug" "closed stdout: run continues in the log"
+assert_not_contains "$(cat "$SB/handoff.log" 2> /dev/null)" "hunter2" "log has no wifi password"
+assert_not_contains "$(cat "$SB/handoff.log" 2> /dev/null)" "tskey-SECRET" "log has no tailscale key"
+absent "$DATA/system/NetworkManager/Home.nmconnection" "closed stdout: wifi still wiped"
+# (b) SIGHUP during the tailscale step
+new_sandbox
+( cd "$SB" && STUB_HUP_PIDFILE="$SB/pid" exec env FRAME_DATA_DIR="$DATA" FRAME_HANDOFF_LOG="$SB/handoff.log" FRAME_HANDOFF_TEST_ALLOW_NONROOT=1 PATH="$BIN:$PATH" \
+    bash "$SCRIPT" --yes --clear-photos > "$SB/out.txt" 2>&1 < /dev/null ) &
+hp=$!
+echo "$hp" > "$SB/pid"
+wait "$hp"
+assert_eq "$?" 0 "SIGHUP during run: exit 0"
+assert_eq "$(calls | tail -1)" "systemctl [poweroff]" "SIGHUP: poweroff still last"
+assert_contains "$(calls)" "[delete]" "SIGHUP: wifi deleted"
+# (c) the log may never live on the persistent partition
+new_sandbox
+for lp in "$DATA/h.log" "/data/h.log" "relative.log" ""; do
+  OUT="$(cd "$SB" && env FRAME_DATA_DIR="$DATA" FRAME_HANDOFF_LOG="$lp" FRAME_HANDOFF_TEST_ALLOW_NONROOT=1 PATH="$BIN:$PATH" \
+    bash "$SCRIPT" --dry-run --yes --keep-photos 2>&1 < /dev/null)"
+  assert_eq "$?" 2 "bad FRAME_HANDOFF_LOG [$lp]"
+done
 
 # ---- 6. safety: unsafe layouts and failures ----------------------------------------------
 new_sandbox

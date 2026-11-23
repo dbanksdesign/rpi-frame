@@ -112,7 +112,8 @@ re-run, then copy `uploads/` and `data/` back.
 
 ## Handing the frame over
 
-When the frame is ready to give away, run this on it (over SSH on the LAN or at a keyboard):
+When the frame is ready to give away, run this on it at a keyboard, or over SSH on the LAN
+(WiFi or Ethernet). **Not over Tailscale**: the script logs Tailscale out part-way through.
 
 ```
 sudo ./pi/prepare-handoff.sh --dry-run --clear-photos     # review the plan, changes nothing
@@ -132,6 +133,9 @@ permanent even with the overlay on, because they live on `/data`. Afterwards, de
 from your Tailscale admin console (`https://login.tailscale.com/admin/machines`): logging out
 does not always remove it. Once the brother has joined Tailscale and shared the frame, you keep
 remote access with your SSH key and the admin page; you do not need to do anything else.
+After you confirm, the script keeps going and powers the frame off by itself even if your SSH
+session drops (it ignores the hang-up). Its output goes to `/run/prepare-handoff.log` (RAM, gone
+at shutdown) and is also shown on your terminal while the session lasts.
 Unplug it only after the green LED stops flashing.
 
 ## First boot (the brother)
