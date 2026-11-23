@@ -162,7 +162,7 @@ export function createUpdateService(deps: UpdateServiceDeps): UpdateService {
     startedAt = now();
     startFailure = null;
     try {
-      await deps.run('sudo', ['-n', 'systemd-run', '--unit=frame-update', '/usr/local/sbin/frame-update', tag]);
+      await deps.run('sudo', ['-n', 'systemd-run', '--collect', '--unit=frame-update', '/usr/local/sbin/frame-update', tag]);
     } catch {
       startedAt = null;
       startFailure = 'Could not start the update';

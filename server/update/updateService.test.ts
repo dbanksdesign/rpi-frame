@@ -181,6 +181,7 @@ describe('update service', () => {
     expect(run).toHaveBeenCalledWith('sudo', [
       '-n',
       'systemd-run',
+      '--collect',
       '--unit=frame-update',
       '/usr/local/sbin/frame-update',
       'v1.2.0',
