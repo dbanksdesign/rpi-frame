@@ -31,6 +31,8 @@ jobs:
           npx vitest run
           bash pi/updater/test/updater.test.sh
           bash scripts/make-release.test.sh
+          bash pi/test/install-dry-run.test.sh
+          bash pi/test/prepare-handoff.test.sh
 
       - name: Verify tag format
         env:

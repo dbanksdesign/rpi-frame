@@ -156,8 +156,16 @@ name>` with the owner key, and the admin page).
 git tag vX.Y.Z && git push --tags
 ```
 
-The release workflow builds `frame-vX.Y.Z.tar.gz` + `.sha256` and attaches them to the GitHub
+The release workflow runs the tests (vitest, the updater, release, installer dry-run and
+handoff suites), builds `frame-vX.Y.Z.tar.gz` + `.sha256` and attaches them to the GitHub
 release. The admin page's Update button (and a fresh install) then picks it up.
+
+The `.sha256` checksum protects against a corrupted or truncated download, **not** against a
+compromised release: it comes from the same GitHub release as the tarball, so anyone who can
+publish a release (or push a `v*` tag, which triggers the workflow) can ship code that every
+frame's root-run updater installs. Keep that set of people small: add a repository tag ruleset
+(Settings → Rules → Rulesets, target tags `v*`) that restricts who may create, update or delete
+`v*` tags, and protect `main`.
 
 ## Maintaining a frame
 
