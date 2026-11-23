@@ -7,7 +7,7 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SCRIPT="$HERE/../frame-update.sh"
 REAL_CURL="$(command -v curl)"
 ROOT="$(mktemp -d)"
-trap 'rm -rf "$ROOT"' EXIT
+trap 'chmod -R u+rwX "$ROOT" 2>/dev/null; rm -rf "$ROOT"' EXIT
 
 PASS=0
 FAIL=0
@@ -38,6 +38,7 @@ STUB
 cat > "$STUBS/systemctl" <<'STUB'
 #!/usr/bin/env bash
 echo "$*" >> "$STUB_STATE/systemctl.log"
+if [[ -e "$STUB_STATE/systemctl_fail_first" ]]; then rm -f "$STUB_STATE/systemctl_fail_first"; exit 1; fi
 STUB
 if ! command -v flock > /dev/null 2>&1; then
   cat > "$STUBS/flock" <<'STUB'
@@ -61,7 +62,8 @@ new_sandbox() {
   export FRAME_DATA_DIR="$SB/data"
   export STUB_STATE="$SB/state"
   export REAL_CURL
-  mkdir -p "$STUB_STATE" "$SB/srv"
+  export FRAME_LOCK_FILE="$SB/lock/frame-update.lock"
+  mkdir -p "$STUB_STATE" "$SB/srv" "$SB/lock" "$FRAME_DATA_DIR/releases"
   echo ok > "$STUB_STATE/health"
   export FRAME_RELEASE_BASE_URL="file://$SB/srv"
   export FRAME_HEALTH_URL="http://health.test/api/health"
@@ -171,12 +173,11 @@ t_health_rollback() {
 
 t_concurrent() {
   new_sandbox
-  mkdir -p "$FRAME_DATA_DIR"
   local sentinel='{"state":"running","tag":"v0.9.9","message":"Downloading…"}'
   printf '%s' "$sentinel" > "$FRAME_DATA_DIR/update-status.json"
   python3 -I -c 'import fcntl,sys,time
 f=open(sys.argv[1],"a"); fcntl.flock(f,fcntl.LOCK_EX)
-open(sys.argv[2],"w").close(); time.sleep(30)' "$FRAME_DATA_DIR/.update.lock" "$SB/held" &
+open(sys.argv[2],"w").close(); time.sleep(30)' "$FRAME_LOCK_FILE" "$SB/held" &
   local holder=$! i
   for i in $(seq 1 50); do [[ -e "$SB/held" ]] && break; sleep 0.1; done
   publish_release v1.0.0
@@ -189,6 +190,7 @@ open(sys.argv[2],"w").close(); time.sleep(30)' "$FRAME_DATA_DIR/.update.lock" "$
 
 t_invalid_tags() {
   new_sandbox
+  rm -rf "$FRAME_DATA_DIR"
   publish_release v1.2.3
   local t
   for t in "" v1 v1.2.3.4 1.2.3 'v1.2.3; rm -rf /' $'v1.2.3\n' ../v1.2.3 'v1.2.3 ' 'v1.2.3/../x'; do
@@ -215,7 +217,7 @@ def mk(name, entries):
         for ent in entries:
             t.addfile(*ent)
 def f(path, data=b"x"):
-    ti = tarfile.TarInfo(path); ti.size = len(data); return (ti, io.BytesIO(data))
+    ti = tarfile.TarInfo(path); ti.mode = 0o644; ti.size = len(data); return (ti, io.BytesIO(data))
 def sym(path, target):
     ti = tarfile.TarInfo(path); ti.type = tarfile.SYMTYPE; ti.linkname = target; return (ti,)
 def good(): return [f("dist/server/index.js"), f("VERSION", b"v1.0.0\n")]
@@ -224,9 +226,14 @@ mk("dots", good() + [f("../evil-dots")])
 mk("dots2", good() + [f("dist/../../evil-dots2")])
 mk("symabs", good() + [sym("lnk", "/etc")])
 mk("symup", good() + [sym("lnk", "../../outside")])
+def d(path):
+    ti = tarfile.TarInfo(path); ti.mode = 0o755; ti.type = tarfile.DIRTYPE; return (ti,)
+mk("chain", good() + [d("d"), sym("d/b", ".."), sym("a", "d/b/d/b/../../../..")])
+mk("chainwrite", good() + [d("d"), sym("d/b", ".."), sym("a", "d/b/d/b/../../../.."), f("a/tmp/ESCAPED")])
+mk("writethru", good() + [sym("x", "dist"), f("x/evil")])
 PY
   local n
-  for n in abs dots dots2 symabs symup; do
+  for n in abs dots dots2 symabs symup chain chainwrite writethru; do
     publish_raw_tar v1.0.0 "$SB/$n.tgz"
     run_update v1.0.0
     assert_eq "$RC" 10 "malicious $n exit"
@@ -279,7 +286,88 @@ t_first_install_and_reinstall() {
   assert_eq "$(ls -A "$FRAME_DATA_DIR/releases" | tr '\n' ' ')" "v1.0.0 " "no leftovers after reinstall"
 }
 
-for t in t_success t_bad_checksum t_garbage_tarball t_health_rollback t_concurrent t_invalid_tags \
+t_systemctl_fails() {
+  new_sandbox
+  old_release v0.0.1 202401010000; ln -s releases/v0.0.1 "$FRAME_DATA_DIR/current"
+  publish_release v1.0.0
+  : > "$STUB_STATE/systemctl_fail_first"
+  run_update v1.0.0
+  assert_eq "$RC" 11 "exit code"
+  assert_eq "$(cur)" releases/v0.0.1 "rolled back"
+  assert_eq "$(calls)" 2 "restart twice"
+  assert_true "status failed" grep -q '"state":"failed"' "$FRAME_DATA_DIR/update-status.json"
+}
+
+t_bad_numeric_env() {
+  new_sandbox
+  publish_release v1.0.0
+  local v
+  for v in FRAME_HEALTH_TIMEOUT FRAME_HEALTH_INTERVAL FRAME_KEEP; do
+    ( export "$v=60s"; run_update v1.0.0; echo "$RC" > "$SB/rc" )
+    assert_eq "$(cat "$SB/rc")" 2 "bad $v"
+  done
+  ( export FRAME_HEALTH_TIMEOUT='a[$(touch '"$SB"'/pwned)]'; run_update v1.0.0; echo "$RC" > "$SB/rc" )
+  assert_eq "$(cat "$SB/rc")" 2 "injection value"
+  assert_true "not evaluated" test ! -e "$SB/pwned"
+  assert_true "status untouched" test ! -e "$FRAME_DATA_DIR/update-status.json"
+  assert_eq "$(ls -A "$FRAME_DATA_DIR/releases" | wc -l | tr -d ' ')" 0 "nothing created"
+}
+
+t_sigterm_during_health() {
+  new_sandbox
+  old_release v0.0.1 202401010000; ln -s releases/v0.0.1 "$FRAME_DATA_DIR/current"
+  publish_release v1.0.0
+  echo fail > "$STUB_STATE/health"
+  export FRAME_HEALTH_TIMEOUT=100 FRAME_HEALTH_INTERVAL=30
+  PATH="$STUBS:$PATH" bash "$SCRIPT" v1.0.0 > "$SB/out.txt" 2>&1 &
+  local pid=$! i
+  for i in $(seq 1 100); do grep -q health.test "$STUB_STATE/curl.log" 2>/dev/null && break; sleep 0.1; done
+  kill -TERM "$pid"
+  wait "$pid"; RC=$?
+  assert_eq "$RC" 11 "exit code"
+  assert_eq "$(cur)" releases/v0.0.1 "rolled back"
+  assert_eq "$(calls)" 2 "restart twice"
+  assert_true "status failed" grep -q '"state":"failed"' "$FRAME_DATA_DIR/update-status.json"
+}
+
+t_releases_symlink() {
+  new_sandbox
+  rm -rf "$FRAME_DATA_DIR/releases"; mkdir "$SB/elsewhere"; ln -s "$SB/elsewhere" "$FRAME_DATA_DIR/releases"
+  publish_release v1.0.0
+  run_update v1.0.0
+  assert_eq "$RC" 2 "symlinked releases refused"
+  assert_true "status untouched" test ! -e "$FRAME_DATA_DIR/update-status.json"
+  rm "$FRAME_DATA_DIR/releases"
+  run_update v1.0.0
+  assert_eq "$RC" 2 "missing releases refused"
+}
+
+t_lock_symlink_not_truncated() {
+  new_sandbox
+  printf 'precious' > "$SB/sentinel"
+  rm -rf "$SB/lock"; mkdir "$SB/lock"; ln -s "$SB/sentinel" "$FRAME_LOCK_FILE"
+  publish_release v1.0.0
+  run_update v1.0.0
+  assert_eq "$(cat "$SB/sentinel")" precious "sentinel intact"
+}
+
+t_default_lock_outside_data() {
+  case "$(grep -o 'FRAME_LOCK_FILE:-[^}]*' "$SCRIPT")" in
+    'FRAME_LOCK_FILE:-/run/frame-update.lock') ok ;;
+    *) bad "default lock path" ;;
+  esac
+}
+
+t_health_fail_first_install() {
+  new_sandbox
+  publish_release v1.0.0
+  echo fail > "$STUB_STATE/health"
+  run_update v1.0.0
+  assert_eq "$RC" 11 "exit code"
+  assert_eq "$(status_json)" '{"state":"failed","tag":"v1.0.0","message":"The new version didn'"'"'t start"}' "status"
+}
+
+for t in t_systemctl_fails t_bad_numeric_env t_sigterm_during_health t_releases_symlink t_lock_symlink_not_truncated t_default_lock_outside_data t_health_fail_first_install t_success t_bad_checksum t_garbage_tarball t_health_rollback t_concurrent t_invalid_tags \
   t_malicious t_safe_internal_symlink t_first_status_running t_version_mismatch t_first_install_and_reinstall; do
   echo "== $t"
   "$t"
